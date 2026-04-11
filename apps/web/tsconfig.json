@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@contentforge/database": ["../../packages/database/index.ts"]
     }
   },
   "include": [

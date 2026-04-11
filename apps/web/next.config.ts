@@ -1,7 +1,9 @@
+// apps/web/next.config.ts
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Next.js'e dışarıdaki paketimizi derlemesini söylüyoruz
+  transpilePackages: ["@contentforge/database"],
 };
 
 export default nextConfig;
