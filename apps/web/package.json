@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.2",
+    "@tailwindcss/typography": "^0.5.19",
     "@types/bcrypt": "^6.0.0",
     "@types/node": "^20",
     "@types/react": "^19",

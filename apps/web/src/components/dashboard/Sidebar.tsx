@@ -9,6 +9,7 @@ import {
     LayoutDashboard,
     FileEdit,
     History,
+    Settings, // <-- EKLENDİ: Settings ikonu
     ChevronLeft,
     ChevronRight,
     Sparkles
@@ -19,6 +20,7 @@ const navigation = [
     { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
     { name: "AI Generator", href: "/dashboard/generator", icon: FileEdit },
     { name: "History", href: "/dashboard/history", icon: History },
+    { name: "Settings", href: "/dashboard/settings", icon: Settings }, // <-- EKLENDİ: Settings menü elemanı
 ];
 
 export default function Sidebar() {

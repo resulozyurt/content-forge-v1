@@ -1,7 +1,6 @@
-/* apps/web/src/app/globals.css */
-
 /* 1. Import the new Tailwind v4 engine */
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 /* 2. Tell Tailwind v4 to trigger Dark Mode when the "dark" class is present */
 @custom-variant dark (&:is(.dark *));
