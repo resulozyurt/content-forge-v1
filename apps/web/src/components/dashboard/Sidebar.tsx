@@ -4,6 +4,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useLocale } from "next-intl";
 import {
     LayoutDashboard,
     FileEdit,
@@ -12,7 +13,7 @@ import {
     ChevronRight,
     Sparkles
 } from "lucide-react";
-import { cn } from "@/lib/utils"; // We will create this helper next
+import { cn } from "@/lib/utils";
 
 const navigation = [
     { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
@@ -23,6 +24,7 @@ const navigation = [
 export default function Sidebar() {
     const [isCollapsed, setIsCollapsed] = useState(false);
     const pathname = usePathname();
+    const locale = useLocale();
 
     return (
         <aside className={cn(
@@ -36,11 +38,17 @@ export default function Sidebar() {
 
             <nav className="flex-1 px-3 py-4 space-y-1">
                 {navigation.map((item) => {
-                    const isActive = pathname === item.href;
+                    const fullHref = `/${locale}${item.href}`;
+
+                    // DÜZELTME: Overview (/dashboard) için KESİN eşleşme, diğerleri için alt yol eşleşmesi arıyoruz.
+                    const isActive = item.href === '/dashboard'
+                        ? pathname === fullHref
+                        : pathname === fullHref || pathname.startsWith(fullHref + '/');
+
                     return (
                         <Link
                             key={item.name}
-                            href={item.href}
+                            href={fullHref}
                             className={cn(
                                 "flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-all group",
                                 isActive
@@ -57,7 +65,7 @@ export default function Sidebar() {
 
             <button
                 onClick={() => setIsCollapsed(!isCollapsed)}
-                className="absolute -right-3 top-20 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full p-1 hover:bg-gray-50 dark:hover:bg-gray-800"
+                className="absolute -right-3 top-20 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-full p-1 hover:bg-gray-50 dark:hover:bg-gray-800 shadow-sm"
             >
                 {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
             </button>
