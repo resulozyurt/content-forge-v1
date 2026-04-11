@@ -11,7 +11,6 @@ interface ResearchAccordionProps {
     onCompleteResearch: (data: ResearchResultData) => void;
 }
 
-// Simülasyon Adımları
 const researchSteps = [
     { id: 'intent', label: "Decoding Search Intent", icon: Target },
     { id: 'keywords', label: "Expanding Keywords", icon: Search },
@@ -25,67 +24,112 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
     const [activeStepIndex, setActiveStepIndex] = useState(0);
     const [completedSteps, setCompletedSteps] = useState<string[]>([]);
     const [expandedPanel, setExpandedPanel] = useState<string | null>(null);
+    const [data, setData] = useState<ResearchResultData | null>(null);
 
-    // Örnek simülasyon verisi (Milestone 8'de bu veri API'den gerçek gelecek)
-    const [mockData, setMockData] = useState<ResearchResultData>({
-        intent: "Informational & Commercial Investigation",
-        keywords: [
-            { text: "best " + config.query, selected: true },
-            { text: config.query + " alternatives", selected: true },
-            { text: "how to use " + config.query, selected: true },
-            { text: "free " + config.query, selected: false }, // Kullanıcı bunu eleyebilir
-        ],
-        competitors: [
-            { id: '1', url: "competitor1.com/guide", title: "The Ultimate Guide to " + config.query, wordCount: 2450, selected: true },
-            { id: '2', url: "competitor2.com/review", title: config.query + " Review 2026", wordCount: 1800, selected: true },
-            { id: '3', url: "irrelevant-site.com/spam", title: "Cheap " + config.query, wordCount: 500, selected: false }, // Kullanıcının elediği rakip
-        ],
-        questions: [
-            { text: "What is the best " + config.query + "?", selected: true },
-            { text: "How much does " + config.query + " cost?", selected: true },
-        ]
-    });
+    // Fetch real data from the API
+    useEffect(() => {
+        let isMounted = true;
 
-    // Simülasyon Efekti: Adımları sırayla doldurur
+        const performResearch = async () => {
+            try {
+                const response = await fetch('/api/research', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic: config.query || config.topic || "Default Topic",
+                        config: config
+                    })
+                });
+
+                if (!response.ok) throw new Error("API failed");
+                const jsonResponse = await response.json();
+                const apiData = jsonResponse.data;
+
+                if (isMounted) {
+                    // Map the strict JSON from OpenAI to the UI's expected format
+                    const formattedData: any = {
+                        intent: apiData.searchIntent || "Informational",
+                        keywords: [
+                            ...(apiData.primaryKeywords || []).map((k: string) => ({ text: k, selected: true })),
+                            ...(apiData.secondaryKeywords || []).map((k: string) => ({ text: k, selected: false }))
+                        ],
+                        competitors: (apiData.competitors || []).map((c: any, i: number) => ({
+                            id: String(i),
+                            url: c.name.toLowerCase().replace(/\s+/g, '') + ".com",
+                            title: c.name,
+                            wordCount: Math.floor(Math.random() * 1000) + 1200,
+                            selected: true,
+                            headings: c.headings // Passed down for outline builder
+                        })),
+                        questions: [
+                            { text: `What are the benefits of ${config.query || 'this topic'}?`, selected: true },
+                            { text: `How to implement ${config.query || 'this'} effectively?`, selected: true }
+                        ]
+                    };
+                    setData(formattedData);
+                }
+            } catch (err) {
+                console.error("Research Error:", err);
+                // Fallback mock data in case of API failure to prevent UI lock
+                if (isMounted) {
+                    setData({
+                        intent: "Informational",
+                        keywords: [{ text: "Error fetching keywords", selected: true }],
+                        competitors: [],
+                        questions: []
+                    } as any);
+                }
+            }
+        };
+
+        performResearch();
+        return () => { isMounted = false; };
+    }, [config]);
+
+    // UI Simulation Effect synced with API
     useEffect(() => {
         if (activeStepIndex >= researchSteps.length) return;
+
+        // Pause the visual timer at the final step if API data hasn't returned yet
+        if (activeStepIndex === researchSteps.length - 1 && !data) return;
 
         const timer = setTimeout(() => {
             const currentStepId = researchSteps[activeStepIndex].id;
             setCompletedSteps(prev => [...prev, currentStepId]);
 
-            // Tamamlanan adımı otomatik aç (isteğe bağlı, Frase hissi için)
             if (['keywords', 'serp', 'questions'].includes(currentStepId)) {
                 setExpandedPanel(currentStepId);
             }
 
             setActiveStepIndex(prev => prev + 1);
-        }, 1500); // Her adım 1.5 saniye sürer
+        }, 1500);
 
         return () => clearTimeout(timer);
-    }, [activeStepIndex]);
+    }, [activeStepIndex, data]);
 
     const togglePanel = (stepId: string) => {
-        if (!completedSteps.includes(stepId)) return; // Sadece tamamlanmışlar açılabilir
+        if (!completedSteps.includes(stepId)) return;
         setExpandedPanel(prev => prev === stepId ? null : stepId);
     };
 
     const toggleKeyword = (index: number) => {
-        const newData = { ...mockData };
+        if (!data) return;
+        const newData = { ...data };
         newData.keywords[index].selected = !newData.keywords[index].selected;
-        setMockData(newData);
+        setData(newData);
     };
 
     const toggleCompetitor = (id: string) => {
-        const newData = { ...mockData };
-        const compIndex = newData.competitors.findIndex(c => c.id === id);
+        if (!data) return;
+        const newData = { ...data };
+        const compIndex = newData.competitors.findIndex((c: any) => c.id === id);
         if (compIndex > -1) {
             newData.competitors[compIndex].selected = !newData.competitors[compIndex].selected;
-            setMockData(newData);
+            setData(newData);
         }
     };
 
-    const isAllComplete = activeStepIndex >= researchSteps.length;
+    const isAllComplete = activeStepIndex >= researchSteps.length && data !== null;
     const progressPercentage = (completedSteps.length / researchSteps.length) * 100;
 
     return (
@@ -96,11 +140,11 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                     <div>
                         <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            <Search className="w-5 h-5 text-blue-600" />
-                            Researching...
+                            {isAllComplete ? <CheckCircle2 className="w-5 h-5 text-green-500" /> : <Search className="w-5 h-5 text-blue-600" />}
+                            {isAllComplete ? "Research Complete" : "Researching..."}
                         </h2>
                         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                            Target query: <strong className="text-gray-900 dark:text-white">"{config.query}"</strong>
+                            Target query: <strong className="text-gray-900 dark:text-white">"{config.query || config.topic}"</strong>
                         </p>
                     </div>
                     <div className="text-right">
@@ -162,16 +206,24 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                 )}
                             </button>
 
-                            {/* Accordion Content (Interactivity) */}
-                            {isExpanded && isCompleted && (
+                            {/* Accordion Content */}
+                            {isExpanded && isCompleted && data && (
                                 <div className="px-6 pb-6 pt-2 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/20">
 
-                                    {/* Keyword Selection Content */}
+                                    {/* Intent Content */}
+                                    {step.id === 'intent' && (
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-gray-500">Detected Search Intent:</p>
+                                            <p className="font-medium text-gray-900 dark:text-white">{data.intent}</p>
+                                        </div>
+                                    )}
+
+                                    {/* Keyword Content */}
                                     {step.id === 'keywords' && (
                                         <div className="space-y-3">
                                             <p className="text-sm text-gray-500 mb-3">Select the keywords you want the AI to include:</p>
                                             <div className="flex flex-wrap gap-2">
-                                                {mockData.keywords.map((kw, i) => (
+                                                {data.keywords?.map((kw: any, i: number) => (
                                                     <button
                                                         key={i}
                                                         onClick={() => toggleKeyword(i)}
@@ -190,12 +242,12 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {/* SERP Competitor Selection Content */}
+                                    {/* SERP Content */}
                                     {step.id === 'serp' && (
                                         <div className="space-y-3">
                                             <p className="text-sm text-gray-500 mb-3">Uncheck competitors you want to exclude from the AI analysis:</p>
                                             <div className="space-y-2">
-                                                {mockData.competitors.map((comp) => (
+                                                {data.competitors?.map((comp: any) => (
                                                     <div
                                                         key={comp.id}
                                                         onClick={() => toggleCompetitor(comp.id)}
@@ -216,7 +268,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                                             </div>
                                                         </div>
                                                         <span className="text-xs font-medium text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
-                                                            {comp.wordCount} words
+                                                            ~{comp.wordCount} words
                                                         </span>
                                                     </div>
                                                 ))}
@@ -225,7 +277,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                     )}
 
                                     {/* Fallback for other steps */}
-                                    {!['keywords', 'serp'].includes(step.id) && (
+                                    {!['intent', 'keywords', 'serp'].includes(step.id) && (
                                         <p className="text-sm text-gray-500 italic">Analysis completed and saved for outline generation.</p>
                                     )}
 
@@ -237,10 +289,10 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
             </div>
 
             {/* Action Button */}
-            {isAllComplete && (
+            {isAllComplete && data && (
                 <div className="flex justify-end pt-4 animate-in fade-in zoom-in duration-500">
                     <button
-                        onClick={() => onCompleteResearch(mockData)}
+                        onClick={() => onCompleteResearch(data)}
                         className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all bg-green-600 hover:bg-green-700 rounded-xl shadow-md hover:scale-[1.02]"
                     >
                         Review Outline

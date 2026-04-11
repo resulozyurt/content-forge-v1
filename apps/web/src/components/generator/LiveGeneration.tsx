@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Loader2, CheckCircle2, Image as ImageIcon, Link as LinkIcon, Sparkles, Code2, ArrowRight } from "lucide-react";
+import { Loader2, CheckCircle2, Image as ImageIcon, Sparkles, Code2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 
@@ -14,7 +14,7 @@ interface LiveGenerationProps {
 export default function LiveGeneration({ outlineData, onComplete }: LiveGenerationProps) {
     const [blocks, setBlocks] = useState<GeneratedBlock[]>([]);
     const [isFinished, setIsFinished] = useState(false);
-    const [currentTask, setCurrentTask] = useState("Initializing NLP Engine...");
+    const [currentTask, setCurrentTask] = useState("Initializing AI Engine and connecting to API...");
     const [progress, setProgress] = useState(0);
 
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -26,79 +26,73 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         }
     }, [blocks, currentTask]);
 
-    // Python AI & NLP Simülasyon Motoru
+    // GERÇEK API BAĞLANTISI VE CANLI YAZIM SİMÜLASYONU
     useEffect(() => {
         let isMounted = true;
-        let h2Counter = 0;
 
         const generateArticle = async () => {
-            const newBlocks: GeneratedBlock[] = [];
-            const totalSteps = outlineData.headings.length * 2; // Her başlık için (Başlık + Paragraf)
-            let currentStep = 0;
+            try {
+                setProgress(10);
 
-            // Yapay Zekayı Başlatma Gecikmesi
-            await new Promise(r => setTimeout(r, 1500));
+                // 1. ADIM: Arka plandaki API'mize (Senin Python mantığına) gerçek isteği atıyoruz
+                const response = await fetch('/api/generate/article', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        outlineData: outlineData,
+                        config: {} // Model, dil gibi ayarlar ileride buraya eklenecek
+                    })
+                });
 
-            for (let i = 0; i < outlineData.headings.length; i++) {
-                if (!isMounted) return;
+                if (!response.ok) throw new Error("Generation API failed");
 
-                const heading = outlineData.headings[i];
+                const data = await response.json();
+                const fetchedBlocks: GeneratedBlock[] = data.blocks;
 
-                // 1. Başlığı Ekle
-                setCurrentTask(`Writing section: ${heading.text}...`);
-                await new Promise(r => setTimeout(r, 800));
+                setCurrentTask("Content received! Rendering dynamically...");
+                setProgress(30);
 
-                const headingBlock: GeneratedBlock = {
-                    id: `h-${i}`,
-                    type: heading.level,
-                    content: heading.text,
-                };
-                newBlocks.push(headingBlock);
-                setBlocks([...newBlocks]);
+                // 2. ADIM: API'den gelen tüm veriyi bir anda ekrana basmak yerine, 
+                // "Canlı Üretim" hissini korumak için sırayla (animasyonlu) ekliyoruz.
+                const newBlocks: GeneratedBlock[] = [];
+                const totalSteps = fetchedBlocks.length;
 
-                if (heading.level === 'h2') h2Counter++;
+                for (let i = 0; i < fetchedBlocks.length; i++) {
+                    if (!isMounted) return;
 
-                // 2. Paragraf Üretimi (Backlink ve Keyword entegrasyonu simülasyonu)
-                setCurrentTask(`Applying NLP algorithms and injecting backlinks for: ${heading.text}...`);
-                await new Promise(r => setTimeout(r, 1500)); // Paragraf yazma süresi
+                    const currentBlock = fetchedBlocks[i];
+                    newBlocks.push(currentBlock);
+                    setBlocks([...newBlocks]); // Ekrana bloğu bas
 
-                // Simüle edilmiş paragraf metni (İçinde SEO kelimeleri ve Backlink var)
-                const sampleKeyword = outlineData.selectedKeywords.length > 0
-                    ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length]
-                    : "industry standard";
+                    // Bloğun türüne göre ekrandaki "Yükleniyor..." metnini güncelle
+                    if (currentBlock.type === 'h2' || currentBlock.type === 'h3') {
+                        setCurrentTask(`Writing section: ${currentBlock.content}...`);
+                    } else if (currentBlock.type === 'paragraph') {
+                        setCurrentTask(`Applying NLP algorithms and injecting backlinks...`);
+                    } else if (currentBlock.type === 'image') {
+                        setCurrentTask(`Triggering Image AI for visual context...`);
+                    }
 
-                const paragraphBlock: GeneratedBlock = {
-                    id: `p-${i}`,
-                    type: 'paragraph',
-                    content: `This section explores the core aspects of ${heading.text}. When evaluating the landscape, it becomes clear that prioritizing <strong class="text-blue-600">${sampleKeyword}</strong> is crucial for long-term success. According to recent industry reports <a href="#" class="text-indigo-500 underline decoration-indigo-300 hover:text-indigo-700 transition-colors" title="Simulated Backlink">[Source: TechInsights 2026]</a>, organizations that adapt to these methodologies see a significant increase in overall efficiency.`,
-                };
-                newBlocks.push(paragraphBlock);
-                setBlocks([...newBlocks]);
+                    // İlerleme çubuğunu güncelle (30% ile 100% arası)
+                    setProgress(30 + ((i + 1) / totalSteps) * 70);
 
-                currentStep += 2;
-                setProgress((currentStep / totalSteps) * 100);
+                    // Daktilo/Üretim hissi için araya ufak bir gecikme koy (800ms)
+                    await new Promise(r => setTimeout(r, 800));
+                }
 
-                // 3. GÖRSEL ÜRETİMİ (HER 2 ADET H2'DE BİR)
-                if (heading.level === 'h2' && h2Counter % 2 === 0) {
-                    setCurrentTask(`Triggering Image AI: Generating contextual image for previous sections...`);
-                    await new Promise(r => setTimeout(r, 2000)); // Görsel üretimi daha uzun sürer
+                // 3. ADIM: İşlem Tamamlandı
+                if (isMounted) {
+                    setIsFinished(true);
+                    setCurrentTask("Generation Complete!");
+                    setProgress(100);
+                }
 
-                    const imageBlock: GeneratedBlock = {
-                        id: `img-${i}`,
-                        type: 'image',
-                        content: `A highly detailed, professional illustration representing ${heading.text}, corporate style, modern colors, 8k resolution.`, // Bu aslında bizim DALL-E/Midjourney promptumuz
-                    };
-                    newBlocks.push(imageBlock);
-                    setBlocks([...newBlocks]);
+            } catch (error) {
+                console.error(error);
+                if (isMounted) {
+                    setCurrentTask("An error occurred during generation.");
                 }
             }
-
-            // Üretim Bitti
-            setCurrentTask("Finalizing content structure and calculating SEO scores...");
-            await new Promise(r => setTimeout(r, 1000));
-            setIsFinished(true);
-            setCurrentTask("Generation Complete!");
-            setProgress(100);
         };
 
         generateArticle();
@@ -155,7 +149,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                     {blocks.length === 0 && (
                         <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4 opacity-50 pt-20">
                             <Sparkles size={48} className="animate-pulse" />
-                            <p>Connecting to Python NLP microservices...</p>
+                            <p>Connecting to AI microservices...</p>
                         </div>
                     )}
 
@@ -186,7 +180,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                         Prompt: "{block.content}"
                                     </p>
                                     <div className="mt-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-500 bg-indigo-100 dark:bg-indigo-900/40 px-3 py-1 rounded-full">
-                                        <Sparkles size={12} /> Stable Diffusion / DALL-E Pipeline
+                                        <Sparkles size={12} /> DALL-E / Imagen Pipeline
                                     </div>
                                 </div>
                             )}
