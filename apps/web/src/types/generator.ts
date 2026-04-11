@@ -52,3 +52,12 @@ export interface FinalOutlineData {
   headings: OutlineHeading[];
   selectedKeywords: string[];
 }
+
+export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image';
+
+export interface GeneratedBlock {
+  id: string;
+  type: ContentBlockType;
+  content: string;
+  metadata?: any;
+}
