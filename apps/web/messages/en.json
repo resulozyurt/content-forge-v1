@@ -1,0 +1,22 @@
+{
+  "Dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome back",
+    "description": "Here is an overview of your content generation activities.",
+    "createButton": "Create New Content",
+    "availableCredits": "Available Credits",
+    "totalDocuments": "Total Documents",
+    "accountStatus": "Account Status",
+    "active": "Active",
+    "billingHistory": "View billing history",
+    "viewAll": "View all documents"
+  },
+  "Navigation": {
+    "overview": "Overview",
+    "generator": "AI Generator",
+    "history": "History",
+    "settings": "Settings",
+    "logout": "Sign Out",
+    "admin": "Admin Panel"
+  }
+}

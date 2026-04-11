@@ -1,9 +1,12 @@
 // apps/web/next.config.ts
 import type { NextConfig } from "next";
+import createNextIntlPlugin from 'next-intl/plugin';
+
+// next-intl eklentisine dosyamızın tam yolunu gösteriyoruz
+const withNextIntl = createNextIntlPlugin('./src/i18n.ts');
 
 const nextConfig: NextConfig = {
-  // Next.js'e dışarıdaki paketimizi derlemesini söylüyoruz
   transpilePackages: ["@contentforge/database"],
 };
 
-export default nextConfig;
+export default withNextIntl(nextConfig);
