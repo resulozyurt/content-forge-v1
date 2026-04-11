@@ -1,0 +1,94 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------
+// 1. USER & BILLING (Kullanıcı ve Kredi Sistemi)
+// ------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(USER)
+  isVerified    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  wallet        Wallet?
+  contentJobs   ContentJob[]
+}
+
+model Wallet {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  creditsAvailable Int      @default(0)
+  
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// ------------------------------------------------------
+// 2. MODULAR TOOLS & JOBS (Modüler Araçlar ve İşler)
+// ------------------------------------------------------
+
+model Tool {
+  id          String   @id @default(cuid())
+  slug        String   @unique // e.g., "seo-writer", "ad-copy"
+  name        String   
+  isActive    Boolean  @default(true)
+  
+  jobs        ContentJob[]
+}
+
+model ContentJob {
+  id            String   @id @default(cuid())
+  userId        String
+  toolId        String
+  aiModel       AIModel  @default(CLAUDE_3_5_SONNET) // Varsayılan en iyi model
+  status        JobStatus @default(PENDING)
+  
+  inputPayload  Json     // Kullanıcının formda girdiği veriler (keyword, language vs.)
+  outputContent String?  // Üretilen nihai HTML/Markdown
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tool          Tool     @relation(fields: [toolId], references: [id])
+}
+
+enum AIModel {
+  CLAUDE_3_5_SONNET
+  GPT_4_OMNI
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ------------------------------------------------------
+// 3. i18n TRANSLATIONS (Çoklu Dil Sistemi)
+// ------------------------------------------------------
+
+model Translation {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g., "auth.login.button"
+  enUS        String   // Ana dilimiz (Native American English)
+  trTR        String?  // Türkçe (Sonradan admin panelden doldurulacak)
+}
