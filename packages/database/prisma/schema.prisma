@@ -33,6 +33,20 @@ model User {
   wallet        Wallet?
   settings      UserSettings?
   contentJobs   ContentJob[]
+  
+  transactions  Transaction[]
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Int      // Negative for usage (e.g., -5), positive for top-up
+  type        String   // "RESEARCH", "GENERATION", "EDIT", "PROOFREAD", "TOPUP"
+  description String?  // Optional: "Article: How to bake a cake"
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Wallet {

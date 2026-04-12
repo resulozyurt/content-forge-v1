@@ -1,0 +1,14 @@
+{
+  "Dashboard": {
+    "title": "Gösterge Paneli",
+    "overview": "Genel Bakış",
+    "aiGenerator": "Yapay Zeka Üretici",
+    "history": "Geçmiş",
+    "settings": "Ayarlar"
+  },
+  "Header": {
+    "adminPanel": "Yönetici Paneli",
+    "settings": "Ayarlar",
+    "signOut": "Çıkış Yap"
+  }
+}

@@ -2,13 +2,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Save, Globe, User, Lock, Server, ShieldCheck, Loader2, CheckCircle2 } from "lucide-react";
+import { Save, Globe, User, Lock, Server, ShieldCheck, Loader2, CheckCircle2, Receipt, ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
+    const [transactions, setTransactions] = useState<any[]>([]);
 
     // Form State Architecture
     const [formData, setFormData] = useState({
@@ -18,15 +19,16 @@ export default function SettingsPage() {
         defaultStatus: "draft"
     });
 
-    // Fetch existing configuration on component mount
+    // Fetch existing configuration and billing history on component mount
     useEffect(() => {
         let isMounted = true;
 
-        const fetchSettings = async () => {
+        const fetchSettingsAndBilling = async () => {
             try {
-                const res = await fetch("/api/user/settings");
-                if (res.ok) {
-                    const data = await res.json();
+                // 1. Fetch Integration Settings
+                const settingsRes = await fetch("/api/user/settings");
+                if (settingsRes.ok) {
+                    const data = await settingsRes.json();
                     if (isMounted && data.settings) {
                         setFormData(prev => ({
                             ...prev,
@@ -36,14 +38,24 @@ export default function SettingsPage() {
                         }));
                     }
                 }
+
+                // 2. Fetch Transaction History
+                const txRes = await fetch("/api/user/transactions");
+                if (txRes.ok) {
+                    const txData = await txRes.json();
+                    if (isMounted && txData.transactions) {
+                        setTransactions(txData.transactions);
+                    }
+                }
+
             } catch (error) {
-                console.error("[FETCH_FAULT] Unable to load configuration.", error);
+                console.error("[FETCH_FAULT] Unable to load configuration or billing data.", error);
             } finally {
                 if (isMounted) setIsLoading(false);
             }
         };
 
-        fetchSettings();
+        fetchSettingsAndBilling();
         return () => { isMounted = false; };
     }, []);
 
@@ -87,7 +99,7 @@ export default function SettingsPage() {
     }
 
     return (
-        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
 
             <div>
                 <h1 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">Platform Configuration</h1>
@@ -217,6 +229,53 @@ export default function SettingsPage() {
                     </button>
                 </div>
             </form>
+
+            {/* Usage & Billing History Ledger */}
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden mt-8">
+                <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/20 px-6 py-4 flex items-center gap-3">
+                    <Receipt className="w-5 h-5 text-blue-500" />
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Usage & Billing History</h2>
+                </div>
+                <div className="p-0 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-gray-50 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400 uppercase text-[10px] font-bold tracking-widest">
+                            <tr>
+                                <th className="px-6 py-3">Event Date</th>
+                                <th className="px-6 py-3">Transaction Type</th>
+                                <th className="px-6 py-3">Description</th>
+                                <th className="px-6 py-3 text-right">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                            {transactions.map((tx) => (
+                                <tr key={tx.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors">
+                                    <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
+                                        {new Date(tx.createdAt).toLocaleDateString()} {new Date(tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </td>
+                                    <td className="px-6 py-4 font-bold text-gray-900 dark:text-white">
+                                        <span className="bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded text-[10px]">
+                                            {tx.type}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-gray-600 dark:text-gray-400 italic">
+                                        {tx.description || "System processing cost"}
+                                    </td>
+                                    <td className={cn("px-6 py-4 text-right font-bold", tx.amount < 0 ? "text-red-500" : "text-green-500")}>
+                                        {tx.amount < 0 ? <ArrowDownRight size={12} className="inline mr-1" /> : <ArrowUpRight size={12} className="inline mr-1" />}
+                                        {Math.abs(tx.amount)} Credits
+                                    </td>
+                                </tr>
+                            ))}
+                            {transactions.length === 0 && (
+                                <tr>
+                                    <td colSpan={4} className="px-6 py-10 text-center text-gray-400 italic">No transactions found in this billing cycle.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
         </div>
     );
 }
