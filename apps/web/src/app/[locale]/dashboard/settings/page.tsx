@@ -2,277 +2,217 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Save, Link as LinkIcon, Key, Globe, CheckCircle2, AlertCircle, RefreshCw, Server, Layers } from "lucide-react";
+import { Save, Globe, User, Lock, Server, ShieldCheck, Loader2, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
-    // Form Stateleri
-    const [wpUrl, setWpUrl] = useState("");
-    const [wpUsername, setWpUsername] = useState("");
-    const [wpAppPassword, setWpAppPassword] = useState("");
-    const [defaultStatus, setDefaultStatus] = useState("draft");
-    const [wpSitemap, setWpSitemap] = useState("");
-    const [isTesting, setIsTesting] = useState(false);
-    const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle');
+    const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
-    const [isLoading, setIsLoading] = useState(true); // Sayfa ilk açıldığında yükleniyor statesi
+    const [saveSuccess, setSaveSuccess] = useState(false);
 
-    // 1. Sayfa Açıldığında Veritabanından Ayarları Çek
+    // Form State Architecture
+    const [formData, setFormData] = useState({
+        wpUrl: "",
+        wpUsername: "",
+        wpAppPassword: "", // Write-only field from the UI perspective
+        defaultStatus: "draft"
+    });
+
+    // Fetch existing configuration on component mount
     useEffect(() => {
+        let isMounted = true;
+
         const fetchSettings = async () => {
             try {
-                const res = await fetch('/api/user/settings');
+                const res = await fetch("/api/user/settings");
                 if (res.ok) {
                     const data = await res.json();
-                    if (data) {
-                        setWpUrl(data.wpUrl || "");
-                        setWpUsername(data.wpUsername || "");
-                        setWpAppPassword(data.wpAppPassword || "");
-                        setWpSitemap(data.wpSitemap || "");
-                        setDefaultStatus(data.defaultStatus || "draft");
+                    if (isMounted && data.settings) {
+                        setFormData(prev => ({
+                            ...prev,
+                            wpUrl: data.settings.wpUrl || "",
+                            wpUsername: data.settings.wpUsername || "",
+                            defaultStatus: data.settings.defaultStatus || "draft",
+                        }));
                     }
                 }
             } catch (error) {
-                console.error("Failed to fetch settings", error);
+                console.error("[FETCH_FAULT] Unable to load configuration.", error);
             } finally {
-                setIsLoading(false);
+                if (isMounted) setIsLoading(false);
             }
         };
+
         fetchSettings();
+        return () => { isMounted = false; };
     }, []);
 
-    // Python wp.py Entegrasyon Simülasyonu
-    const handleTestConnection = async () => {
-        if (!wpUrl || !wpUsername || !wpAppPassword) {
-            alert("Please fill in all WordPress credentials first.");
-            return;
-        }
-
-        setIsTesting(true);
-        setTestResult('idle');
-
-        // Gerçekte burada Python API'ye istek gidecek
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Simüle edilmiş başarı
-        setTestResult('success');
-        setIsTesting(false);
-    };
-
-    // 2. Veritabanına Gerçek Kayıt İşlemi
-    const handleSaveSettings = async (e: React.FormEvent) => {
+    // Handle form synchronization with the backend registry
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSaving(true);
+        setSaveSuccess(false);
 
         try {
-            const res = await fetch('/api/user/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ wpUrl, wpUsername, wpAppPassword, wpSitemap, defaultStatus })
+            const res = await fetch("/api/user/settings", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(formData)
             });
 
-            if (res.ok) {
-                alert("Settings saved successfully!");
-            } else {
-                alert("Failed to save settings.");
-            }
+            if (!res.ok) throw new Error("Synchronization failed.");
+
+            setSaveSuccess(true);
+
+            // Clear the password field after successful secure transmission
+            setFormData(prev => ({ ...prev, wpAppPassword: "" }));
+
+            // Reset success message after 3 seconds
+            setTimeout(() => setSaveSuccess(false), 3000);
+
         } catch (error) {
-            console.error("Error saving settings", error);
-            alert("An error occurred while saving.");
+            console.error("[SYNC_FAULT] Configuration update failed.", error);
+            alert("Failed to save settings. Please try again.");
         } finally {
             setIsSaving(false);
         }
     };
 
-    // Veriler veritabanından çekilirken gösterilecek yükleme ekranı
     if (isLoading) {
         return (
-            <div className="flex justify-center items-center h-[60vh]">
-                <div className="flex flex-col items-center gap-4 text-gray-500">
-                    <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
-                    <p className="text-sm font-medium">Loading settings...</p>
-                </div>
+            <div className="flex h-[600px] w-full items-center justify-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
             </div>
         );
     }
 
     return (
-        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500">
+        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-            {/* Header Section */}
             <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white transition-colors">
-                    Integrations & Settings
-                </h1>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 transition-colors">
-                    Connect your WordPress site and configure default publishing behaviors.
-                </p>
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">Platform Configuration</h1>
+                <p className="text-gray-500 dark:text-gray-400 mt-2">Manage your integration endpoints, security credentials, and global preferences.</p>
             </div>
 
-            <form onSubmit={handleSaveSettings} className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
 
-                {/* WordPress Connection Card */}
-                <div className="bg-white dark:bg-gray-900 shadow-sm rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden transition-colors">
-                    <div className="p-6 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-                        <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            <Server className="w-5 h-5 text-blue-600" />
-                            WordPress Connection
-                        </h2>
-                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                            Link your site using Application Passwords to automatically publish AI-generated content.
-                        </p>
+                {/* Integration Parameters Card */}
+                <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm overflow-hidden">
+                    <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/20 px-6 py-4 flex items-center gap-3">
+                        <Server className="w-5 h-5 text-indigo-500" />
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">WordPress Integration</h2>
                     </div>
 
                     <div className="p-6 space-y-6">
-                        {/* WP URL */}
-                        <div>
-                            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                                WordPress Site URL
-                            </label>
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <Globe className="h-5 w-5 text-gray-400" />
-                                </div>
-                                <input
-                                    type="url"
-                                    value={wpUrl}
-                                    onChange={(e) => setWpUrl(e.target.value)}
-                                    placeholder="https://yoursite.com"
-                                    className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                                    required
-                                />
-                            </div>
-                        </div>
-
-                        {/* WP Sitemap URL */}
-                        <div>
-                            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                                XML Sitemap URL (For Internal Linking)
-                            </label>
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <Layers className="h-5 w-5 text-gray-400" />
-                                </div>
-                                <input
-                                    type="url"
-                                    value={wpSitemap}
-                                    onChange={(e) => setWpSitemap(e.target.value)}
-                                    placeholder="https://yoursite.com/sitemap_index.xml"
-                                    className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                                />
-                            </div>
-                        </div>
-
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {/* WP Username */}
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                                    Username or Email
-                                </label>
+
+                            {/* Endpoint URL */}
+                            <div className="space-y-2">
+                                <label className="text-sm font-bold text-gray-700 dark:text-gray-300">Target Endpoint URL</label>
                                 <div className="relative">
-                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                        <LinkIcon className="h-5 w-5 text-gray-400" />
-                                    </div>
+                                    <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                                    <input
+                                        type="url"
+                                        placeholder="https://yourwebsite.com"
+                                        value={formData.wpUrl}
+                                        onChange={(e) => setFormData({ ...formData, wpUrl: e.target.value })}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:text-white"
+                                    />
+                                </div>
+                                <p className="text-xs text-gray-500">The root URL of your WordPress installation.</p>
+                            </div>
+
+                            {/* Authentication Username */}
+                            <div className="space-y-2">
+                                <label className="text-sm font-bold text-gray-700 dark:text-gray-300">Admin Username</label>
+                                <div className="relative">
+                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                                     <input
                                         type="text"
-                                        value={wpUsername}
-                                        onChange={(e) => setWpUsername(e.target.value)}
-                                        placeholder="admin"
-                                        className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                                        required
+                                        placeholder="admin_user"
+                                        value={formData.wpUsername}
+                                        onChange={(e) => setFormData({ ...formData, wpUsername: e.target.value })}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:text-white"
                                     />
                                 </div>
                             </div>
 
-                            {/* WP Application Password */}
-                            <div>
-                                <label className="flex items-center justify-between text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                                    <span>Application Password</span>
-                                    <a href="#" className="text-xs text-blue-600 hover:underline font-normal">How to get this?</a>
-                                </label>
+                            {/* Application Password (Secure) */}
+                            <div className="space-y-2 md:col-span-2">
+                                <label className="text-sm font-bold text-gray-700 dark:text-gray-300">Application Password</label>
                                 <div className="relative">
-                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                        <Key className="h-5 w-5 text-gray-400" />
-                                    </div>
+                                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                                     <input
                                         type="password"
-                                        value={wpAppPassword}
-                                        onChange={(e) => setWpAppPassword(e.target.value)}
-                                        placeholder="xxxx xxxx xxxx xxxx"
-                                        className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                                        required
+                                        placeholder="Leave blank to keep current password"
+                                        value={formData.wpAppPassword}
+                                        onChange={(e) => setFormData({ ...formData, wpAppPassword: e.target.value })}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all dark:text-white"
                                     />
                                 </div>
+                                <p className="text-xs text-gray-500 flex items-center gap-1.5 mt-1.5">
+                                    <ShieldCheck className="w-3.5 h-3.5 text-green-500" />
+                                    Credentials are encrypted via AES-256 before storage.
+                                </p>
                             </div>
                         </div>
 
-                        {/* Test Connection Button & Status */}
-                        <div className="pt-4 flex items-center gap-4">
-                            <button
-                                type="button"
-                                onClick={handleTestConnection}
-                                disabled={isTesting}
-                                className="inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-700 shadow-sm text-sm font-medium rounded-lg text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 transition-colors"
-                            >
-                                {isTesting ? (
-                                    <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Testing Connection...</>
-                                ) : (
-                                    <><Globe className="w-4 h-4 mr-2" /> Test WP Connection</>
-                                )}
-                            </button>
+                        <hr className="border-gray-200 dark:border-gray-800" />
 
-                            {testResult === 'success' && (
-                                <span className="flex items-center text-sm text-green-600 font-bold animate-in fade-in">
-                                    <CheckCircle2 className="w-4 h-4 mr-1" /> Connection Successful!
-                                </span>
-                            )}
-                            {testResult === 'error' && (
-                                <span className="flex items-center text-sm text-red-600 font-bold animate-in fade-in">
-                                    <AlertCircle className="w-4 h-4 mr-1" /> Invalid Credentials
-                                </span>
-                            )}
+                        {/* Default Publishing Behavior */}
+                        <div className="space-y-3">
+                            <label className="text-sm font-bold text-gray-700 dark:text-gray-300">Default Publishing Status</label>
+                            <div className="flex items-center gap-6">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="status"
+                                        value="draft"
+                                        checked={formData.defaultStatus === "draft"}
+                                        onChange={(e) => setFormData({ ...formData, defaultStatus: e.target.value })}
+                                        className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-gray-700 dark:text-gray-300">Draft (Recommended)</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="status"
+                                        value="publish"
+                                        checked={formData.defaultStatus === "publish"}
+                                        onChange={(e) => setFormData({ ...formData, defaultStatus: e.target.value })}
+                                        className="w-4 h-4 text-red-600 border-gray-300 focus:ring-red-500"
+                                    />
+                                    <span className="text-sm text-gray-700 dark:text-gray-300">Publish Immediately</span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Publishing Defaults Card */}
-                <div className="bg-white dark:bg-gray-900 shadow-sm rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden transition-colors">
-                    <div className="p-6 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-                        <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            Publishing Defaults
-                        </h2>
-                    </div>
+                {/* Form Actions */}
+                <div className="flex items-center justify-end gap-4">
+                    {saveSuccess && (
+                        <span className="text-sm font-bold text-green-600 dark:text-green-400 flex items-center animate-in fade-in slide-in-from-right-4">
+                            <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                            Configuration Secured
+                        </span>
+                    )}
 
-                    <div className="p-6">
-                        <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                            Default Post Status
-                        </label>
-                        <select
-                            value={defaultStatus}
-                            onChange={(e) => setDefaultStatus(e.target.value)}
-                            className="block w-full max-w-sm pl-3 pr-10 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
-                        >
-                            <option value="draft">Save as Draft (Recommended)</option>
-                            <option value="publish">Publish Immediately</option>
-                            <option value="pending">Pending Review</option>
-                        </select>
-                        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                            When exporting from the AI Editor, articles will be sent to WordPress using this status.
-                        </p>
-                    </div>
-                </div>
-
-                {/* Submit Form */}
-                <div className="flex justify-end pt-4 border-t border-gray-200 dark:border-gray-800">
                     <button
                         type="submit"
                         disabled={isSaving}
-                        className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-bold rounded-xl shadow-md text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-all hover:scale-105"
+                        className={cn(
+                            "inline-flex items-center px-6 py-2.5 text-white text-sm font-bold rounded-lg shadow-md transition-all",
+                            isSaving
+                                ? "bg-gray-400 cursor-not-allowed"
+                                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:scale-[1.02]"
+                        )}
                     >
                         {isSaving ? (
-                            <><RefreshCw className="w-5 h-5 mr-2 animate-spin" /> Saving...</>
+                            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Securing Data...</>
                         ) : (
-                            <><Save className="w-5 h-5 mr-2" /> Save Settings</>
+                            <><Save className="w-4 h-4 mr-2" /> Save Configuration</>
                         )}
                     </button>
                 </div>
