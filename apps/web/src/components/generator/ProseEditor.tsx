@@ -10,7 +10,7 @@ import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import {
     Download, UploadCloud, CheckCircle2, Activity, Target,
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
-    Loader2, AlertCircle
+    Loader2, AlertCircle, SpellCheck
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [isAILoading, setIsAILoading] = useState<boolean>(false);
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
+    const [isProofreading, setIsProofreading] = useState<boolean>(false);
 
     // Reconstruct valid HTML from the generated blocks
     const generateHTMLFromBlocks = () => {
@@ -101,7 +102,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Intercepts user selection and routes it to the AI modification pipeline
+    // Intercepts user selection and routes it to the inline AI modification pipeline
     const handleAIAction = async (action: 'Rewrite' | 'Expand' | 'Condense') => {
         if (!editor || isAILoading) return;
 
@@ -136,6 +137,41 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
         } finally {
             setIsAILoading(false);
             setHasSelection(false);
+        }
+    };
+
+    // Executes the full-document proofreading sequence
+    const handleProofread = async () => {
+        if (!editor || isProofreading) return;
+
+        try {
+            setIsProofreading(true);
+            const currentHTML = editor.getHTML();
+
+            const response = await fetch('/api/generate/proofread', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    htmlContent: currentHTML,
+                    language: "English (US)" // This could be wired to a dynamic config state later
+                })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || "The proofreading pipeline failed.");
+            }
+
+            const data = await response.json();
+
+            // Atomically replace the entire canvas content with the refined output
+            editor.commands.setContent(data.result);
+
+        } catch (error: any) {
+            console.error("[PROOFREAD_FAULT]:", error);
+            alert(`Proofreading execution halted: ${error.message}`);
+        } finally {
+            setIsProofreading(false);
         }
     };
 
@@ -203,6 +239,22 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                 </div>
 
                 <div className="flex items-center gap-3">
+                    {/* Grammar Check / Proofread Button */}
+                    <button
+                        onClick={handleProofread}
+                        disabled={isProofreading}
+                        className={cn(
+                            "inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg transition-colors",
+                            isProofreading ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 dark:hover:bg-gray-700"
+                        )}
+                    >
+                        {isProofreading ? (
+                            <><Loader2 size={16} className="mr-2 animate-spin" /> Analyzing...</>
+                        ) : (
+                            <><SpellCheck size={16} className="mr-2 text-indigo-500" /> Proofread</>
+                        )}
+                    </button>
+
                     <button className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                         <Download size={16} className="mr-2" /> Export
                     </button>
@@ -253,6 +305,17 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                     </button>
                                 </>
                             )}
+                        </div>
+                    )}
+
+                    {/* Render visual loading overlay during full document proofreading */}
+                    {isProofreading && (
+                        <div className="absolute inset-0 z-20 bg-white/60 dark:bg-gray-900/60 backdrop-blur-[1px] flex flex-col items-center justify-center animate-in fade-in">
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-xl flex flex-col items-center">
+                                <Loader2 size={32} className="text-indigo-600 animate-spin mb-4" />
+                                <p className="font-bold text-gray-900 dark:text-white">Analyzing Document Structure</p>
+                                <p className="text-sm text-gray-500 mt-1">Applying advanced linguistic and grammar corrections...</p>
+                            </div>
                         </div>
                     )}
 
