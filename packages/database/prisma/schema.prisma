@@ -22,6 +22,11 @@ model User {
   passwordHash  String
   role          Role      @default(USER)
   isVerified    Boolean   @default(false)
+  
+  // OTP için yeni eklenen alanlar
+  otpCode       String?   
+  otpExpiresAt  DateTime? 
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

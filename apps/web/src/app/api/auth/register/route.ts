@@ -1,63 +1,47 @@
-// apps/web/src/app/api/auth/register/route.ts
-import { NextResponse } from "next/server";
-import { prisma } from "@contentforge/database";
-import bcrypt from "bcrypt";
+import { NextResponse } from 'next/server';
+import { db } from '@contentforge/database';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    const { email, password } = body;
+    const { email, password } = await req.json();
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: "Email and password are required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Email ve şifre zorunludur.' }, { status: 400 });
     }
 
-    // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: {
-        email: email,
-      },
-    });
-
+    const existingUser = await db.user.findUnique({ where: { email } });
     if (existingUser) {
-      return NextResponse.json(
-        { error: "A user with this email already exists" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: 'Bu email adresi zaten kullanımda.' }, { status: 400 });
     }
 
-    // Hash the password securely (Cost factor: 12 is enterprise standard)
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(password, 10);
+    
+    // 6 Haneli rastgele OTP üretimi
+    const otpCode = crypto.randomInt(100000, 999999).toString();
+    // OTP 15 dakika geçerli olacak
+    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Create the user in the database
-    // Note: isVerified defaults to false per our Prisma schema
-    const newUser = await prisma.user.create({
+    await db.user.create({
       data: {
         email,
-        passwordHash: hashedPassword,
+        passwordHash,
+        otpCode,
+        otpExpiresAt,
       },
     });
 
-    // Create a wallet/balance record for the new user
-    await prisma.wallet.create({
-      data: {
-        userId: newUser.id,
-        creditsAvailable: 100, // Give 100 free credits as a welcome bonus
-      },
-    });
+    // TODO: Burada gerçek bir e-posta servisi (Resend, AWS SES) kullanılacak
+    console.log(`[EMAIL SIMULATION] ${email} adresine gönderilen doğrulama kodu: ${otpCode}`);
 
-    return NextResponse.json(
-      { message: "User registered successfully", userId: newUser.id },
-      { status: 201 }
-    );
+    return NextResponse.json({ 
+      message: 'Kayıt başarılı. Lütfen e-postanıza gelen doğrulama kodunu girin.',
+      requireOtp: true 
+    }, { status: 201 });
+
   } catch (error) {
-    console.error("Registration Error:", error);
-    return NextResponse.json(
-      { error: "An unexpected error occurred during registration" },
-      { status: 500 }
-    );
+    console.error('Kayıt Hatası:', error);
+    return NextResponse.json({ error: 'Sunucu hatası oluştu.' }, { status: 500 });
   }
 }

@@ -1,76 +1,79 @@
 // apps/web/src/lib/auth.ts
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { prisma } from "@contentforge/database";
+import { db } from "@contentforge/database"; // Monorepo veritabanı bağlantınız
 import bcrypt from "bcrypt";
 
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
-      name: "Credentials",
+      name: "credentials",
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        // 1. Gelen verileri kontrol et
         if (!credentials?.email || !credentials?.password) {
-          throw new Error("Missing credentials");
+          throw new Error("Lütfen email ve şifrenizi girin.");
         }
 
-        // 2. Kullanıcıyı veritabanında bul
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email }
+        // 1. Kullanıcıyı veritabanından bul
+        const user = await db.user.findUnique({
+          where: { email: credentials.email },
         });
 
-        if (!user || !user.passwordHash) {
-          throw new Error("Invalid email or password");
+        if (!user) {
+          throw new Error("Bu email adresi ile kayıtlı bir kullanıcı bulunamadı.");
         }
 
-        // 3. Şifreyi bcrypt ile doğrula
-        const isPasswordValid = await bcrypt.compare(credentials.password, user.passwordHash);
-
-        if (!isPasswordValid) {
-          throw new Error("Invalid email or password");
-        }
-
-        // 4. OTP / E-posta Doğrulama Kontrolü (Gelecekteki OTP modülümüz için altyapı)
+        // 2. ADIM 4: E-posta Doğrulama Kontrolü (OTP)
+        // Eğer kullanıcı henüz doğrulanmamışsa girişi engelle
         if (!user.isVerified) {
-          throw new Error("Please verify your email address to login.");
+          throw new Error("Lütfen hesabınızı kullanmadan önce e-posta adresinizi doğrulayın.");
         }
 
-        // 5. Başarılı! Token'a yazılacak bilgileri dön
+        // 3. Şifre Kontrolü
+        const isPasswordCorrect = await bcrypt.compare(
+          credentials.password,
+          user.passwordHash
+        );
+
+        if (!isPasswordCorrect) {
+          throw new Error("Hatalı şifre girdiniz.");
+        }
+
+        // 4. Başarılı: Kullanıcı nesnesini döndür
         return {
           id: user.id,
           email: user.email,
           role: user.role,
         };
-      }
-    })
+      },
+    }),
   ],
-  session: {
-    strategy: "jwt", // Sunucu hafızasını yormamak için JWT kullanıyoruz
-    maxAge: 30 * 24 * 60 * 60, // 30 gün
-  },
   callbacks: {
+    // JWT içine kullanıcı id ve rol bilgisini ekliyoruz
     async jwt({ token, user }) {
-      // Giriş yapıldığında user nesnesi gelir, içindeki verileri token'a aktarırız
       if (user) {
         token.id = user.id;
-        token.role = user.role;
+        token.role = (user as any).role;
       }
       return token;
     },
+    // Session (Frontend) tarafında bu bilgileri erişilebilir kılıyoruz
     async session({ session, token }) {
-      // İstemciye (tarayıcıya) gönderilecek session nesnesini token ile doldururuz
-      if (token && session.user) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as string;
+      if (session.user) {
+        (session.user as any).id = token.id;
+        (session.user as any).role = token.role;
       }
       return session;
-    }
+    },
   },
   pages: {
-    signIn: '/auth/login', // Hata olursa veya yetkisiz erişim olursa buraya yönlendir
-  }
+    signIn: "/auth/login", // Custom login sayfamıza yönlendirir
+  },
+  session: {
+    strategy: "jwt",
+  },
+  secret: process.env.NEXTAUTH_SECRET,
 };
