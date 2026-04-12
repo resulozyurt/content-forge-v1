@@ -1,5 +1,6 @@
+// apps/web/src/app/api/auth/verify/route.ts
 import { NextResponse } from 'next/server';
-import { db } from '@contentforge/database';
+import { prisma } from '@contentforge/database'; // <-- FIXED: Changed from db to prisma
 
 export async function POST(req: Request) {
   try {
@@ -9,7 +10,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Email ve doğrulama kodu zorunludur.' }, { status: 400 });
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
       return NextResponse.json({ error: 'Kullanıcı bulunamadı.' }, { status: 404 });
@@ -23,9 +24,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Geçersiz veya süresi dolmuş doğrulama kodu.' }, { status: 400 });
     }
 
-    // OTP doğru. Kullanıcıyı onayla, Cüzdan (Wallet) ve Ayarlar (Settings) tablosunu oluştur
-    await db.$transaction(async (tx) => {
-      // 1. Kullanıcıyı güncelle ve OTP'yi temizle
+    // Execute atomic transaction to verify user and initialize dependencies
+    await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: user.id },
         data: {
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // 2. Başlangıç bakiyesiyle Cüzdan oluştur (Örn: Demo için 10 kredi hediye edilebilir, şimdilik 0)
+      // Initialize the billing wallet
       await tx.wallet.create({
         data: {
           userId: user.id,
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // 3. Boş UserSettings kaydı oluştur (WP entegrasyonu vb. için)
+      // Initialize default user settings
       await tx.userSettings.create({
         data: {
           userId: user.id,
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: 'Hesabınız başarıyla doğrulandı. Giriş yapabilirsiniz.' }, { status: 200 });
 
   } catch (error) {
-    console.error('Doğrulama Hatası:', error);
+    console.error('[VERIFICATION_FAULT]:', error);
     return NextResponse.json({ error: 'Doğrulama sırasında bir hata oluştu.' }, { status: 500 });
   }
 }

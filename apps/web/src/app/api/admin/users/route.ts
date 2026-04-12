@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { db } from "@contentforge/database";
+import { prisma } from "@contentforge/database";
 
 // Middleware utility to verify administrative privileges
 async function verifyAdminAccess() {

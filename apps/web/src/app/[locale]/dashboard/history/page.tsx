@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Search, Filter, FileText, Calendar, Edit3, Trash2, ExternalLink, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,7 @@ export default function HistoryPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("All");
+    const router = useRouter();
 
     useEffect(() => {
         const fetchHistory = async () => {
@@ -29,19 +31,20 @@ export default function HistoryPage() {
         fetchHistory();
     }, []);
 
-    // KELİME SAYISI HATASI ÇÖZÜMÜ: Etiketlerin yerine boşluk koyarak sayıyoruz
+    // Calculate structural word count accurately
     const getWordCount = (html: string) => {
         if (!html) return 0;
         const text = html.replace(/<[^>]*>?/gm, ' ');
         return text.split(/\s+/).filter(word => word.length > 0).length;
     };
 
-    // BAŞLIK HATASI ÇÖZÜMÜ: Artık veritabanına kaydettiğimiz gerçek title'ı çekiyoruz
+    // Resilient headline extraction fallback
     const getDocumentTitle = (doc: any) => {
         if (doc.inputPayload?.title) return doc.inputPayload.title;
+        if (doc.inputPayload?.query) return doc.inputPayload.query;
         const match = doc.outputContent?.match(/<h[1-2][^>]*>(.*?)<\/h[1-2]>/);
-        if (match && match[1]) return match[1].replace(/<[^>]+>/g, '');
-        return "Generated SEO Article";
+        if (match && match[1]) return match[1].replace(/<[^>]+>/g, '').trim();
+        return "Generated SEO Document";
     };
 
     const formatDate = (dateString: string) => {
@@ -49,17 +52,29 @@ export default function HistoryPage() {
         return new Date(dateString).toLocaleDateString(undefined, options);
     };
 
-    // SİLME İŞLEMİ EKLENDİ
+    // Execute secure document deletion
     const handleDelete = async (id: string) => {
-        if (!confirm("Are you sure you want to delete this document?")) return;
+        if (!confirm("Are you certain you wish to delete this document from the registry?")) return;
         try {
             const res = await fetch(`/api/documents/delete?id=${id}`, { method: 'DELETE' });
             if (res.ok) {
                 setDocuments(docs => docs.filter(d => d.id !== id));
             }
         } catch (error) {
-            alert("Failed to delete document.");
+            alert("Failed to delete document from the cluster.");
         }
+    };
+
+    // Generate local .html blob for export
+    const handleExport = (doc: any) => {
+        const htmlContent = doc.outputContent || "<p>No content available.</p>";
+        const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${getDocumentTitle(doc).replace(/\s+/g, '_').toLowerCase()}.html`;
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     const filteredDocuments = documents.filter((doc) => {
@@ -82,13 +97,12 @@ export default function HistoryPage() {
                 </div>
                 <Link
                     href="/dashboard/generator"
-                    className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                    className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-bold rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                 >
                     + New Document
                 </Link>
             </div>
 
-            {/* FİLTRE EKRANI TASARIM KAYMASI ÇÖZÜMÜ */}
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex flex-col md:flex-row gap-4 justify-between items-center shadow-sm transition-colors">
                 <div className="relative w-full md:w-1/2">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -118,10 +132,6 @@ export default function HistoryPage() {
                             <option value="FAILED">Failed</option>
                         </select>
                     </div>
-                    <button className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                        <Calendar className="w-4 h-4 mr-2 text-gray-500" />
-                        Date Sort
-                    </button>
                 </div>
             </div>
 
@@ -138,7 +148,7 @@ export default function HistoryPage() {
                         </div>
                         <h3 className="text-lg font-bold text-gray-900 dark:text-white">No documents found</h3>
                         <p className="text-gray-500 dark:text-gray-400 max-w-sm">
-                            {searchQuery ? "No documents match your current search or filter criteria." : "You haven't generated any content yet. Start by creating a new document."}
+                            {searchQuery ? "No documents match your current search or filter criteria." : "You haven't generated any content yet."}
                         </p>
                     </div>
                 ) : (
@@ -146,7 +156,7 @@ export default function HistoryPage() {
                         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
                             <thead className="bg-gray-50 dark:bg-gray-800/50">
                                 <tr>
-                                    <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Document Name</th>
+                                    <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider w-2/5">Document Name</th>
                                     <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
                                     <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Word Count</th>
                                     <th scope="col" className="px-6 py-4 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created</th>
@@ -156,24 +166,24 @@ export default function HistoryPage() {
                             <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-100 dark:divide-gray-800">
                                 {filteredDocuments.map((doc) => (
                                     <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
-                                        <td className="px-6 py-4 whitespace-nowrap">
+                                        <td className="px-6 py-4">
                                             <div className="flex items-center">
                                                 <div className="flex-shrink-0 h-10 w-10 bg-blue-50 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
                                                     <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                                                 </div>
-                                                <div className="ml-4">
-                                                    <div className="text-sm font-bold text-gray-900 dark:text-white truncate max-w-xs sm:max-w-sm">
+                                                <div className="ml-4 overflow-hidden">
+                                                    <div className="text-sm font-bold text-gray-900 dark:text-white truncate">
                                                         {getDocumentTitle(doc)}
                                                     </div>
-                                                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">
-                                                        {doc.tool?.name || doc.aiModel.replace(/_/g, ' ')}
+                                                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium uppercase tracking-wider">
+                                                        {doc.aiModel?.replace(/_/g, ' ') || 'AI MODEL'}
                                                     </div>
                                                 </div>
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <span className={cn(
-                                                "inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider",
+                                                "inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
                                                 doc.status === 'COMPLETED' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                                                     doc.status === 'FAILED' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
                                                         'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
@@ -188,16 +198,19 @@ export default function HistoryPage() {
                                             {formatDate(doc.createdAt)}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <button className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Open in Editor">
+                                            <div className="flex items-center justify-end gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                                                <button
+                                                    onClick={() => router.push('/dashboard/generator?edit=' + doc.id)}
+                                                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Open in Editor">
                                                     <Edit3 className="w-4 h-4" />
                                                 </button>
                                                 {doc.status === 'COMPLETED' && (
-                                                    <button className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Export">
+                                                    <button
+                                                        onClick={() => handleExport(doc)}
+                                                        className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Export HTML">
                                                         <ExternalLink className="w-4 h-4" />
                                                     </button>
                                                 )}
-                                                {/* SİLME BUTONU AKTİF EDİLDİ */}
                                                 <button
                                                     onClick={() => handleDelete(doc.id)}
                                                     className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Delete"

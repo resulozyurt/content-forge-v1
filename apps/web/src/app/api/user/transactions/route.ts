@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { db } from "@contentforge/database";
+import { prisma } from "@contentforge/database";
 
 export async function GET(req: Request) {
     try {
@@ -13,8 +13,7 @@ export async function GET(req: Request) {
 
         const userId = (session.user as any).id;
 
-        // Fetch the last 50 transactions for the user
-        const transactions = await db.transaction.findMany({
+        const transactions = await prisma.transaction.findMany({
             where: { userId },
             orderBy: { createdAt: 'desc' },
             take: 50

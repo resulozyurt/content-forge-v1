@@ -6,13 +6,16 @@ import { Moon, Sun, Bell, User, LogOut, Settings, ShieldCheck, Zap, Globe } from
 import { Menu, Transition } from "@headlessui/react";
 import { Fragment, useEffect, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useLocale } from "next-intl";
 import { cn } from "@/lib/utils";
 
 export default function Header() {
     const { theme, setTheme } = useTheme();
     const { data: session } = useSession();
     const pathname = usePathname();
+    const router = useRouter();
+    const locale = useLocale();
 
     // Prevent hydration mismatch by deferring rendering until client mount
     const [mounted, setMounted] = useState(false);
@@ -139,7 +142,10 @@ export default function Header() {
                             {session?.user?.role === 'ADMIN' && (
                                 <Menu.Item>
                                     {({ active }) => (
-                                        <button className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}>
+                                        <button
+                                            onClick={() => router.push(`/${locale}/dashboard/admin`)}
+                                            className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
+                                        >
                                             <ShieldCheck size={16} className="mr-3" /> Admin Panel
                                         </button>
                                     )}
@@ -147,7 +153,10 @@ export default function Header() {
                             )}
                             <Menu.Item>
                                 {({ active }) => (
-                                    <button className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}>
+                                    <button
+                                        onClick={() => router.push(`/${locale}/dashboard/settings`)}
+                                        className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
+                                    >
                                         <Settings size={16} className="mr-3" /> Settings
                                     </button>
                                 )}

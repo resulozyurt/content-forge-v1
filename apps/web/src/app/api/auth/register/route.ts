@@ -1,5 +1,6 @@
+// apps/web/src/app/api/auth/register/route.ts
 import { NextResponse } from 'next/server';
-import { db } from '@contentforge/database';
+import { prisma } from '@contentforge/database'; // <-- FIXED: Changed from db to prisma
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 
@@ -11,19 +12,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Email ve şifre zorunludur.' }, { status: 400 });
     }
 
-    const existingUser = await db.user.findUnique({ where: { email } });
+    // Verify if the user already exists in the registry
+    const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return NextResponse.json({ error: 'Bu email adresi zaten kullanımda.' }, { status: 400 });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // 6 Haneli rastgele OTP üretimi
+    // Generate a 6-digit verification sequence
     const otpCode = crypto.randomInt(100000, 999999).toString();
-    // OTP 15 dakika geçerli olacak
     const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    await db.user.create({
+    // Persist the new user to the database
+    await prisma.user.create({
       data: {
         email,
         passwordHash,
@@ -32,8 +34,7 @@ export async function POST(req: Request) {
       },
     });
 
-    // TODO: Burada gerçek bir e-posta servisi (Resend, AWS SES) kullanılacak
-    console.log(`[EMAIL SIMULATION] ${email} adresine gönderilen doğrulama kodu: ${otpCode}`);
+    console.log(`[EMAIL_SIMULATION] Verification code dispatched to ${email}: ${otpCode}`);
 
     return NextResponse.json({ 
       message: 'Kayıt başarılı. Lütfen e-postanıza gelen doğrulama kodunu girin.',
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
     }, { status: 201 });
 
   } catch (error) {
-    console.error('Kayıt Hatası:', error);
+    console.error('[REGISTRATION_FAULT]:', error);
     return NextResponse.json({ error: 'Sunucu hatası oluştu.' }, { status: 500 });
   }
 }

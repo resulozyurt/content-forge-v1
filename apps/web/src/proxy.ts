@@ -3,7 +3,8 @@ import createMiddleware from 'next-intl/middleware';
 import { withAuth } from "next-auth/middleware";
 import { NextRequest } from 'next/server';
 
-const locales = ['en'];
+// 1. Expand the routing interceptor to recognize the Turkish locale
+const locales = ['en', 'tr']; 
 const publicPages = ['/auth/login', '/auth/register'];
 
 const intlMiddleware = createMiddleware({
