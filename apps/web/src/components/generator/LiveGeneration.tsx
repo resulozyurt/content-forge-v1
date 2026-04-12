@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Loader2, CheckCircle2, Image as ImageIcon, Sparkles, Code2, ArrowRight } from "lucide-react";
+import { Loader2, CheckCircle2, Sparkles, Code2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 
@@ -14,83 +14,119 @@ interface LiveGenerationProps {
 export default function LiveGeneration({ outlineData, onComplete }: LiveGenerationProps) {
     const [blocks, setBlocks] = useState<GeneratedBlock[]>([]);
     const [isFinished, setIsFinished] = useState(false);
-    const [currentTask, setCurrentTask] = useState("Initializing AI Engine and connecting to API...");
+    const [currentTask, setCurrentTask] = useState("Initializing AI Engine and establishing secure stream...");
     const [progress, setProgress] = useState(0);
+    const [error, setError] = useState<string | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    const hasStarted = useRef(false); // Prevents React Strict Mode double-execution
 
-    // Otomatik kaydırma (Auto-scroll)
+    // Auto-scroll mechanism to keep the latest generated content in view
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [blocks, currentTask]);
 
-    // GERÇEK API BAĞLANTISI VE CANLI YAZIM SİMÜLASYONU
+    // REAL-TIME API CONNECTION AND STREAM PARSING
     useEffect(() => {
+        if (hasStarted.current) return;
+        hasStarted.current = true;
         let isMounted = true;
 
         const generateArticle = async () => {
             try {
                 setProgress(10);
+                setCurrentTask("Connecting to generation pipeline...");
 
-                // 1. ADIM: Arka plandaki API'mize (Senin Python mantığına) gerçek isteği atıyoruz
+                // 1. Dispatch POST request to the SSE streaming endpoint
                 const response = await fetch('/api/generate/article', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         outlineData: outlineData,
-                        config: {} // Model, dil gibi ayarlar ileride buraya eklenecek
+                        config: {} // Extensible configuration payload (model, language, etc.)
                     })
                 });
 
-                if (!response.ok) throw new Error("Generation API failed");
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.message || "Generation pipeline failed to initialize.");
+                }
 
-                const data = await response.json();
-                const fetchedBlocks: GeneratedBlock[] = data.blocks;
+                if (!response.body) {
+                    throw new Error("ReadableStream architecture is not supported by the current server response.");
+                }
 
-                setCurrentTask("Content received! Rendering dynamically...");
-                setProgress(30);
+                setProgress(25);
+                setCurrentTask("Stream established. Awaiting incoming content blocks...");
 
-                // 2. ADIM: API'den gelen tüm veriyi bir anda ekrana basmak yerine, 
-                // "Canlı Üretim" hissini korumak için sırayla (animasyonlu) ekliyoruz.
-                const newBlocks: GeneratedBlock[] = [];
-                const totalSteps = fetchedBlocks.length;
+                // 2. Initialize the stream reader and text decoder
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let done = false;
 
-                for (let i = 0; i < fetchedBlocks.length; i++) {
-                    if (!isMounted) return;
+                // Track blocks internally to update progress dynamically
+                let processedBlocksCount = 0;
+                const estimatedTotalBlocks = (outlineData.headings?.length || 5) * 2;
 
-                    const currentBlock = fetchedBlocks[i];
-                    newBlocks.push(currentBlock);
-                    setBlocks([...newBlocks]); // Ekrana bloğu bas
+                // 3. Process the incoming chunked data stream continuously
+                while (!done) {
+                    const { value, done: readerDone } = await reader.read();
+                    done = readerDone;
 
-                    // Bloğun türüne göre ekrandaki "Yükleniyor..." metnini güncelle
-                    if (currentBlock.type === 'h2' || currentBlock.type === 'h3') {
-                        setCurrentTask(`Writing section: ${currentBlock.content}...`);
-                    } else if (currentBlock.type === 'paragraph') {
-                        setCurrentTask(`Applying NLP algorithms and injecting backlinks...`);
-                    } else if (currentBlock.type === 'image') {
-                        setCurrentTask(`Triggering Image AI for visual context...`);
+                    if (value) {
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split("\n\n");
+
+                        for (const line of lines) {
+                            if (line.startsWith("data: ")) {
+                                const dataStr = line.replace("data: ", "").trim();
+
+                                // Detect the termination signal from the backend
+                                if (dataStr === "[DONE]") {
+                                    if (isMounted) {
+                                        setIsFinished(true);
+                                        setCurrentTask("Generation Complete!");
+                                        setProgress(100);
+                                    }
+                                    break;
+                                }
+
+                                try {
+                                    const parsedBlock = JSON.parse(dataStr) as GeneratedBlock;
+                                    processedBlocksCount++;
+
+                                    // Append the new block to the UI state incrementally
+                                    if (isMounted) {
+                                        setBlocks((prev) => [...prev, parsedBlock]);
+
+                                        // Update the dynamic status indicator based on the block type
+                                        if (parsedBlock.type === 'h2' || parsedBlock.type === 'h3') {
+                                            setCurrentTask(`Drafting section: ${parsedBlock.content.substring(0, 40)}...`);
+                                        } else if (parsedBlock.type === 'paragraph') {
+                                            setCurrentTask(`Applying NLP algorithms and optimizing keyword density...`);
+                                        } else if (parsedBlock.type === 'image') {
+                                            setCurrentTask(`Engineering precise text prompts for visual assets...`);
+                                        }
+
+                                        // Calculate a smooth progress curve based on received chunks
+                                        const currentProgress = 25 + Math.min((processedBlocksCount / estimatedTotalBlocks) * 70, 70);
+                                        setProgress(currentProgress);
+                                    }
+                                } catch (e) {
+                                    console.warn("[STREAM_PARSE_WARNING] Encountered a fragmented chunk, skipping rendering.", e);
+                                }
+                            }
+                        }
                     }
-
-                    // İlerleme çubuğunu güncelle (30% ile 100% arası)
-                    setProgress(30 + ((i + 1) / totalSteps) * 70);
-
-                    // Daktilo/Üretim hissi için araya ufak bir gecikme koy (800ms)
-                    await new Promise(r => setTimeout(r, 800));
                 }
 
-                // 3. ADIM: İşlem Tamamlandı
+            } catch (err: any) {
+                console.error("[GENERATION_FAULT]:", err);
                 if (isMounted) {
-                    setIsFinished(true);
-                    setCurrentTask("Generation Complete!");
-                    setProgress(100);
-                }
-
-            } catch (error) {
-                console.error(error);
-                if (isMounted) {
-                    setCurrentTask("An error occurred during generation.");
+                    setError(err.message || "A critical fault interrupted the generation sequence.");
+                    setCurrentTask("Process halted due to an error.");
                 }
             }
         };
@@ -107,16 +143,24 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
-                        <div className={cn("p-2 rounded-lg", isFinished ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" : "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse")}>
+                        <div className={cn("p-2 rounded-lg",
+                            isFinished ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" :
+                                error ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
+                                    "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse"
+                        )}>
                             {isFinished ? <CheckCircle2 size={24} /> : <Code2 size={24} />}
                         </div>
                         <div>
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                                {isFinished ? "Content Successfully Generated" : "AI Production Engine Running..."}
+                                {isFinished ? "Content Successfully Generated" :
+                                    error ? "Pipeline Execution Failed" :
+                                        "AI Production Engine Running..."}
                             </h2>
-                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mt-0.5 flex items-center gap-2">
-                                {!isFinished && <Loader2 size={14} className="animate-spin" />}
-                                {currentTask}
+                            <p className={cn("text-sm font-medium mt-0.5 flex items-center gap-2",
+                                error ? "text-red-500" : "text-gray-500 dark:text-gray-400"
+                            )}>
+                                {!isFinished && !error && <Loader2 size={14} className="animate-spin" />}
+                                {error ? error : currentTask}
                             </p>
                         </div>
                     </div>
@@ -134,19 +178,21 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                 <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                     <div
-                        className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2 rounded-full transition-all duration-500 ease-out"
-                        style={{ width: `${progress}%` }}
+                        className={cn("h-2 rounded-full transition-all duration-500 ease-out",
+                            error ? "bg-red-500" : "bg-gradient-to-r from-blue-600 to-indigo-600"
+                        )}
+                        style={{ width: `${error ? 100 : progress}%` }}
                     ></div>
                 </div>
             </div>
 
-            {/* Canlı Yazım Ekranı (Terminal / Document View) */}
+            {/* Live Terminal / Document View */}
             <div
                 ref={scrollRef}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-inner overflow-y-auto p-8 h-[600px] scroll-smooth"
             >
                 <div className="max-w-3xl mx-auto space-y-6">
-                    {blocks.length === 0 && (
+                    {blocks.length === 0 && !error && (
                         <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4 opacity-50 pt-20">
                             <Sparkles size={48} className="animate-pulse" />
                             <p>Connecting to AI microservices...</p>
@@ -180,8 +226,8 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                         </div>
                     ))}
 
-                    {/* Yanıp sönen imleç (Cursor) */}
-                    {!isFinished && blocks.length > 0 && (
+                    {/* Blinking Cursor */}
+                    {!isFinished && !error && blocks.length > 0 && (
                         <div className="w-3 h-6 bg-blue-500 animate-pulse mt-4"></div>
                     )}
                 </div>

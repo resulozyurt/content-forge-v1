@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { useEditor, EditorContent, BubbleMenu } from '@tiptap/react';
+import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
@@ -25,19 +25,21 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
     const [hasSelection, setHasSelection] = useState(false);
     const [activeTab, setActiveTab] = useState<SidebarTab>('optimize');
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [isAILoading, setIsAILoading] = useState<boolean>(false);
+    const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
-    // Generate real HTML from blocks, preserving AI generated image HTML
+    // Reconstruct valid HTML from the generated blocks
     const generateHTMLFromBlocks = () => {
         return blocks.map(block => {
             if (block.type === 'h2') return `<h2>${block.content}</h2>`;
             if (block.type === 'h3') return `<h3>${block.content}</h3>`;
             if (block.type === 'paragraph') return `<p>${block.content}</p>`;
-            if (block.type === 'image') return block.content; // Render DALL-E image markup
+            if (block.type === 'image') return block.content;
             return '';
         }).join('');
     };
 
-    // Dynamic SEO Meta Extraction
+    // Dynamic extraction for SEO meta tags
     const metaTitle = outlineData.headings?.[0]?.text || "Generated AI Article";
     const firstParagraph = blocks.find(b => b.type === 'paragraph')?.content?.replace(/<[^>]*>?/gm, '') || "";
     const metaDescription = firstParagraph.substring(0, 155) + "...";
@@ -62,7 +64,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
 
     const wordCount = editor?.getText().split(/\s+/).filter(word => word.length > 0).length || 0;
 
-    // Save to Database Automatically on Mount
+    // Automated initial synchronization with the database
     useEffect(() => {
         let isMounted = true;
 
@@ -79,16 +81,16 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                     body: JSON.stringify({
                         title: metaTitle,
                         content: htmlContent,
-                        aiModel: "Claude", // Or dynamic based on config
+                        aiModel: "Claude",
                         inputData: outlineData
                     })
                 });
 
-                if (!response.ok) throw new Error("Failed to save");
+                if (!response.ok) throw new Error("Database serialization failed.");
                 if (isMounted) setSaveStatus('saved');
 
             } catch (error) {
-                console.error("Database save error:", error);
+                console.error("[DB_SYNC_ERROR]:", error);
                 if (isMounted) setSaveStatus('error');
             }
         };
@@ -99,12 +101,75 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleAIAction = (action: string) => {
-        if (!editor) return;
+    // Intercepts user selection and routes it to the AI modification pipeline
+    const handleAIAction = async (action: 'Rewrite' | 'Expand' | 'Condense') => {
+        if (!editor || isAILoading) return;
+
         const { from, to } = editor.state.selection;
         const text = editor.state.doc.textBetween(from, to, ' ');
-        console.log(`AI Action [${action}] triggered for text: "${text}"`);
-        alert(`Python API will ${action} this text:\n\n"${text.substring(0, 50)}..."`);
+
+        if (!text.trim()) return;
+
+        try {
+            setIsAILoading(true);
+            const response = await fetch('/api/generate/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action,
+                    text,
+                    context: metaTitle
+                })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.error || "The NLP transformation pipeline failed.");
+            }
+
+            const data = await response.json();
+            editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, data.result).run();
+
+        } catch (error: any) {
+            console.error("[EDITOR_AI_FAULT]:", error);
+            alert(`Execution halted: ${error.message}`);
+        } finally {
+            setIsAILoading(false);
+            setHasSelection(false);
+        }
+    };
+
+    // Executes the transmission to the connected WordPress environment
+    const handleWPPublish = async () => {
+        if (!editor || isPublishing) return;
+
+        try {
+            setIsPublishing(true);
+            const htmlContent = editor.getHTML();
+
+            const response = await fetch('/api/documents/publish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: metaTitle,
+                    content: htmlContent
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || "Transmission to WordPress failed.");
+            }
+
+            alert(`Success! Article successfully pushed to WordPress as a draft.\nPost ID: ${data.postId}`);
+
+        } catch (error: any) {
+            console.error("[WP_TRANSMISSION_FAULT]:", error);
+            alert(`Publishing failed: ${error.message}`);
+        } finally {
+            setIsPublishing(false);
+        }
     };
 
     if (!editor) return null;
@@ -112,27 +177,27 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
     return (
         <div className="w-full animate-in fade-in zoom-in-95 duration-500">
 
-            {/* Top Action Bar */}
+            {/* Application Toolbar */}
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-t-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
                 <div className="flex items-center gap-4">
                     <div className="text-sm text-gray-500 dark:text-gray-400 font-medium bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-md">
                         {wordCount} words
                     </div>
 
-                    {/* Dynamic Save Status */}
+                    {/* Persistence Telemetry */}
                     {saveStatus === 'saving' && (
                         <span className="text-sm font-medium text-blue-600 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <Loader2 size={16} className="animate-spin" /> Saving to DB...
+                            <Loader2 size={16} className="animate-spin" /> Syncing cluster...
                         </span>
                     )}
                     {saveStatus === 'saved' && (
                         <span className="text-sm font-medium text-green-600 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <CheckCircle2 size={16} /> Saved to Database
+                            <CheckCircle2 size={16} /> Secured in vault
                         </span>
                     )}
                     {saveStatus === 'error' && (
                         <span className="text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <AlertCircle size={16} /> Save Failed
+                            <AlertCircle size={16} /> Sync fractured
                         </span>
                     )}
                 </div>
@@ -141,42 +206,61 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                     <button className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                         <Download size={16} className="mr-2" /> Export
                     </button>
-                    <button className="inline-flex items-center px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-bold rounded-lg shadow-md hover:from-blue-700 hover:to-indigo-700 transition-colors">
-                        <UploadCloud size={16} className="mr-2" /> Publish to WP
+                    <button
+                        onClick={handleWPPublish}
+                        disabled={isPublishing}
+                        className={cn(
+                            "inline-flex items-center px-5 py-2 text-white text-sm font-bold rounded-lg shadow-md transition-all",
+                            isPublishing
+                                ? "bg-gray-400 cursor-not-allowed"
+                                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 hover:scale-[1.02]"
+                        )}
+                    >
+                        {isPublishing ? (
+                            <><Loader2 size={16} className="mr-2 animate-spin" /> Transmitting...</>
+                        ) : (
+                            <><UploadCloud size={16} className="mr-2" /> Publish to WP</>
+                        )}
                     </button>
                 </div>
             </div>
 
             <div className="flex flex-col lg:flex-row border-x border-b border-gray-200 dark:border-gray-800 rounded-b-2xl overflow-hidden bg-gray-50/30 dark:bg-gray-900/50">
 
-                {/* Main Editor Area */}
+                {/* Primary Canvas */}
                 <div className="flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
 
-                    {/* Dynamic AI Toolbar */}
+                    {/* Contextual AI Command Palette */}
                     {hasSelection && (
-                        <div className="sticky top-0 z-10 mb-6 flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 p-2 rounded-xl shadow-xl animate-in slide-in-from-top-2 fade-in duration-200 w-fit mx-auto">
-                            <span className="text-xs font-bold uppercase tracking-widest opacity-50 px-3">AI Editor</span>
+                        <div className="sticky top-0 z-10 mb-6 flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 p-2 rounded-xl shadow-xl animate-in slide-in-from-top-2 fade-in duration-200 w-fit mx-auto transition-opacity">
+                            <span className="text-xs font-bold uppercase tracking-widest opacity-50 px-3">AI Engine</span>
                             <div className="w-px h-5 bg-gray-700 dark:bg-gray-300 mx-1"></div>
 
-                            <button onClick={() => handleAIAction('Rewrite')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
-                                <Wand2 size={14} className="text-blue-400 dark:text-blue-600" /> Rewrite
-                            </button>
-                            <button onClick={() => handleAIAction('Expand')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
-                                <ArrowLeftRight size={14} className="text-green-400 dark:text-green-600" /> Expand
-                            </button>
-                            <button onClick={() => handleAIAction('Condense')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
-                                <Scissors size={14} className="text-red-400 dark:text-red-600" /> Condense
-                            </button>
+                            {isAILoading ? (
+                                <div className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-blue-400">
+                                    <Loader2 size={14} className="animate-spin" /> Processing matrix...
+                                </div>
+                            ) : (
+                                <>
+                                    <button onClick={() => handleAIAction('Rewrite')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
+                                        <Wand2 size={14} className="text-blue-400 dark:text-blue-600" /> Rewrite
+                                    </button>
+                                    <button onClick={() => handleAIAction('Expand')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
+                                        <ArrowLeftRight size={14} className="text-green-400 dark:text-green-600" /> Expand
+                                    </button>
+                                    <button onClick={() => handleAIAction('Condense')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md">
+                                        <Scissors size={14} className="text-red-400 dark:text-red-600" /> Condense
+                                    </button>
+                                </>
+                            )}
                         </div>
                     )}
 
                     <EditorContent editor={editor} />
                 </div>
 
-                {/* Right Sidebar: Multi-Tab Analytics */}
+                {/* Telemetry Sidebar */}
                 <div className="w-full lg:w-96 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 flex flex-col h-[800px]">
-
-                    {/* Tabs Header */}
                     <div className="flex items-center border-b border-gray-200 dark:border-gray-800 p-2 gap-1 bg-white dark:bg-gray-900">
                         <button
                             onClick={() => setActiveTab('optimize')}
@@ -198,10 +282,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                         </button>
                     </div>
 
-                    {/* Tab Content Area */}
                     <div className="flex-1 overflow-y-auto p-6">
-
-                        {/* TAB 1: OPTIMIZE (SEO & Keywords) */}
                         {activeTab === 'optimize' && (
                             <div className="space-y-8 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <div className="space-y-4">
@@ -219,9 +300,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                         </div>
                                     </div>
                                 </div>
-
                                 <hr className="border-gray-200 dark:border-gray-800" />
-
                                 <div className="space-y-4">
                                     <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
                                         <Target size={16} className="text-orange-500" /> Keyword Tracking
@@ -233,44 +312,33 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                                 <CheckCircle2 size={16} className="text-green-500 flex-shrink-0" />
                                             </div>
                                         ))}
-                                        {(!outlineData.selectedKeywords || outlineData.selectedKeywords.length === 0) && (
-                                            <div className="text-sm text-gray-400 italic">No specific keywords targeted.</div>
-                                        )}
                                     </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* TAB 2: RESEARCH (Competitor Outlines) */}
                         {activeTab === 'research' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
-                                    <Layout size={16} className="text-purple-500" /> Source URLs Used
+                                    <Layout size={16} className="text-purple-500" /> Source URLs Utilized
                                 </h3>
-                                <p className="text-xs text-gray-500">External links integrated into your article structure.</p>
-
                                 <div className="space-y-3">
-                                    {outlineData.sourceUrls && outlineData.sourceUrls.map((url: string, index: number) => (
+                                    {outlineData.sourceUrls?.map((url: string, index: number) => (
                                         <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
                                             <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 dark:text-blue-400 hover:underline break-all">
                                                 {url}
                                             </a>
                                         </div>
                                     ))}
-                                    {(!outlineData.sourceUrls || outlineData.sourceUrls.length === 0) && (
-                                        <p className="text-sm text-gray-500 italic">No external sources used for generation.</p>
-                                    )}
                                 </div>
                             </div>
                         )}
 
-                        {/* TAB 3: TECHNICAL (Meta & Schema) */}
                         {activeTab === 'technical' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
                                     <Code size={16} className="text-emerald-500" /> Meta & Schema
                                 </h3>
-
                                 <div className="space-y-4">
                                     <div>
                                         <label className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
@@ -280,30 +348,12 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                             {metaTitle}
                                         </div>
                                     </div>
-
                                     <div>
                                         <label className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
                                             Meta Description <span className="text-green-500 font-normal">{metaDescription.length}/160 chars</span>
                                         </label>
                                         <div className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300">
                                             {metaDescription}
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
-                                            JSON-LD Schema
-                                        </label>
-                                        <div className="p-3 bg-gray-900 text-green-400 font-mono text-xs rounded-lg overflow-x-auto">
-                                            <pre>{`{
-  "@context": "https://schema.org",
-  "@type": "Article",
-  "headline": "${metaTitle.replace(/"/g, '\\"')}",
-  "author": {
-    "@type": "Organization",
-    "name": "ContentForge Engine"
-  }
-}`}</pre>
                                         </div>
                                     </div>
                                 </div>
