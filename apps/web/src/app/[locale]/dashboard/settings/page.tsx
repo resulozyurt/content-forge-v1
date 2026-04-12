@@ -1,8 +1,8 @@
 // apps/web/src/app/[locale]/dashboard/settings/page.tsx
 "use client";
 
-import { useState } from "react";
-import { Save, Link as LinkIcon, Key, Globe, CheckCircle2, AlertCircle, RefreshCw, Server } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Save, Link as LinkIcon, Key, Globe, CheckCircle2, AlertCircle, RefreshCw, Server, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
@@ -11,11 +11,35 @@ export default function SettingsPage() {
     const [wpUsername, setWpUsername] = useState("");
     const [wpAppPassword, setWpAppPassword] = useState("");
     const [defaultStatus, setDefaultStatus] = useState("draft");
-
-    // Test Bağlantısı Stateleri
+    const [wpSitemap, setWpSitemap] = useState("");
     const [isTesting, setIsTesting] = useState(false);
     const [testResult, setTestResult] = useState<'idle' | 'success' | 'error'>('idle');
     const [isSaving, setIsSaving] = useState(false);
+    const [isLoading, setIsLoading] = useState(true); // Sayfa ilk açıldığında yükleniyor statesi
+
+    // 1. Sayfa Açıldığında Veritabanından Ayarları Çek
+    useEffect(() => {
+        const fetchSettings = async () => {
+            try {
+                const res = await fetch('/api/user/settings');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data) {
+                        setWpUrl(data.wpUrl || "");
+                        setWpUsername(data.wpUsername || "");
+                        setWpAppPassword(data.wpAppPassword || "");
+                        setWpSitemap(data.wpSitemap || "");
+                        setDefaultStatus(data.defaultStatus || "draft");
+                    }
+                }
+            } catch (error) {
+                console.error("Failed to fetch settings", error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchSettings();
+    }, []);
 
     // Python wp.py Entegrasyon Simülasyonu
     const handleTestConnection = async () => {
@@ -35,16 +59,42 @@ export default function SettingsPage() {
         setIsTesting(false);
     };
 
+    // 2. Veritabanına Gerçek Kayıt İşlemi
     const handleSaveSettings = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSaving(true);
 
-        // Veritabanına kaydetme simülasyonu
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+            const res = await fetch('/api/user/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wpUrl, wpUsername, wpAppPassword, wpSitemap, defaultStatus })
+            });
 
-        setIsSaving(false);
-        alert("Settings saved successfully!");
+            if (res.ok) {
+                alert("Settings saved successfully!");
+            } else {
+                alert("Failed to save settings.");
+            }
+        } catch (error) {
+            console.error("Error saving settings", error);
+            alert("An error occurred while saving.");
+        } finally {
+            setIsSaving(false);
+        }
     };
+
+    // Veriler veritabanından çekilirken gösterilecek yükleme ekranı
+    if (isLoading) {
+        return (
+            <div className="flex justify-center items-center h-[60vh]">
+                <div className="flex flex-col items-center gap-4 text-gray-500">
+                    <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
+                    <p className="text-sm font-medium">Loading settings...</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-500">
@@ -90,6 +140,25 @@ export default function SettingsPage() {
                                     placeholder="https://yoursite.com"
                                     className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
                                     required
+                                />
+                            </div>
+                        </div>
+
+                        {/* WP Sitemap URL */}
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                                XML Sitemap URL (For Internal Linking)
+                            </label>
+                            <div className="relative">
+                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <Layers className="h-5 w-5 text-gray-400" />
+                                </div>
+                                <input
+                                    type="url"
+                                    value={wpSitemap}
+                                    onChange={(e) => setWpSitemap(e.target.value)}
+                                    placeholder="https://yoursite.com/sitemap_index.xml"
+                                    className="block w-full pl-10 pr-3 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
                                 />
                             </div>
                         </div>

@@ -1,7 +1,7 @@
 // apps/web/src/components/generator/ProseEditor.tsx
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useEditor, EditorContent, BubbleMenu } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -9,7 +9,8 @@ import Link from '@tiptap/extension-link';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import {
     Download, UploadCloud, CheckCircle2, Activity, Target,
-    Wand2, ArrowLeftRight, Scissors, Search, Code, Layout, List
+    Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
+    Loader2, AlertCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,24 +19,28 @@ interface ProseEditorProps {
     outlineData: FinalOutlineData;
 }
 
-// Sağ panel sekmeleri için tip
 type SidebarTab = 'optimize' | 'research' | 'technical';
 
 export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
     const [hasSelection, setHasSelection] = useState(false);
-    const [activeTab, setActiveTab] = useState<SidebarTab>('optimize'); // <-- Sekme State'i
+    const [activeTab, setActiveTab] = useState<SidebarTab>('optimize');
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
+    // Generate real HTML from blocks, preserving AI generated image HTML
     const generateHTMLFromBlocks = () => {
         return blocks.map(block => {
             if (block.type === 'h2') return `<h2>${block.content}</h2>`;
             if (block.type === 'h3') return `<h3>${block.content}</h3>`;
             if (block.type === 'paragraph') return `<p>${block.content}</p>`;
-            if (block.type === 'image') {
-                return `<img src="https://images.unsplash.com/photo-1661956602116-aa6865609028?auto=format&fit=crop&w=800&q=80" alt="${block.content}" title="Prompt: ${block.content}" />`;
-            }
+            if (block.type === 'image') return block.content; // Render DALL-E image markup
             return '';
         }).join('');
     };
+
+    // Dynamic SEO Meta Extraction
+    const metaTitle = outlineData.headings?.[0]?.text || "Generated AI Article";
+    const firstParagraph = blocks.find(b => b.type === 'paragraph')?.content?.replace(/<[^>]*>?/gm, '') || "";
+    const metaDescription = firstParagraph.substring(0, 155) + "...";
 
     const editor = useEditor({
         extensions: [
@@ -57,11 +62,47 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
 
     const wordCount = editor?.getText().split(/\s+/).filter(word => word.length > 0).length || 0;
 
+    // Save to Database Automatically on Mount
+    useEffect(() => {
+        let isMounted = true;
+
+        const saveToDatabase = async () => {
+            if (blocks.length === 0) return;
+
+            try {
+                setSaveStatus('saving');
+                const htmlContent = generateHTMLFromBlocks();
+
+                const response = await fetch('/api/documents/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: metaTitle,
+                        content: htmlContent,
+                        aiModel: "Claude", // Or dynamic based on config
+                        inputData: outlineData
+                    })
+                });
+
+                if (!response.ok) throw new Error("Failed to save");
+                if (isMounted) setSaveStatus('saved');
+
+            } catch (error) {
+                console.error("Database save error:", error);
+                if (isMounted) setSaveStatus('error');
+            }
+        };
+
+        saveToDatabase();
+
+        return () => { isMounted = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     const handleAIAction = (action: string) => {
         if (!editor) return;
         const { from, to } = editor.state.selection;
         const text = editor.state.doc.textBetween(from, to, ' ');
-
         console.log(`AI Action [${action}] triggered for text: "${text}"`);
         alert(`Python API will ${action} this text:\n\n"${text.substring(0, 50)}..."`);
     };
@@ -77,9 +118,23 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                     <div className="text-sm text-gray-500 dark:text-gray-400 font-medium bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-md">
                         {wordCount} words
                     </div>
-                    <span className="text-sm font-medium text-green-600 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                        <CheckCircle2 size={16} /> Saved to Database
-                    </span>
+
+                    {/* Dynamic Save Status */}
+                    {saveStatus === 'saving' && (
+                        <span className="text-sm font-medium text-blue-600 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
+                            <Loader2 size={16} className="animate-spin" /> Saving to DB...
+                        </span>
+                    )}
+                    {saveStatus === 'saved' && (
+                        <span className="text-sm font-medium text-green-600 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
+                            <CheckCircle2 size={16} /> Saved to Database
+                        </span>
+                    )}
+                    {saveStatus === 'error' && (
+                        <span className="text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
+                            <AlertCircle size={16} /> Save Failed
+                        </span>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -97,7 +152,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                 {/* Main Editor Area */}
                 <div className="flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
 
-                    {/* Dynamic AI Toolbar (Bubble Menu Alternative) */}
+                    {/* Dynamic AI Toolbar */}
                     {hasSelection && (
                         <div className="sticky top-0 z-10 mb-6 flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 p-2 rounded-xl shadow-xl animate-in slide-in-from-top-2 fade-in duration-200 w-fit mx-auto">
                             <span className="text-xs font-bold uppercase tracking-widest opacity-50 px-3">AI Editor</span>
@@ -172,13 +227,13 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                         <Target size={16} className="text-orange-500" /> Keyword Tracking
                                     </h3>
                                     <div className="space-y-2">
-                                        {outlineData.selectedKeywords.map((kw, i) => (
+                                        {outlineData.selectedKeywords?.map((kw, i) => (
                                             <div key={i} className="flex items-center justify-between p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
                                                 <span className="text-sm text-gray-700 dark:text-gray-300 font-medium truncate pr-2">{kw}</span>
                                                 <CheckCircle2 size={16} className="text-green-500 flex-shrink-0" />
                                             </div>
                                         ))}
-                                        {outlineData.selectedKeywords.length === 0 && (
+                                        {(!outlineData.selectedKeywords || outlineData.selectedKeywords.length === 0) && (
                                             <div className="text-sm text-gray-400 italic">No specific keywords targeted.</div>
                                         )}
                                     </div>
@@ -190,27 +245,21 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                         {activeTab === 'research' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
-                                    <Layout size={16} className="text-purple-500" /> Competitor Outlines
+                                    <Layout size={16} className="text-purple-500" /> Source URLs Used
                                 </h3>
-                                <p className="text-xs text-gray-500">Reference headings from top-ranking SERP results.</p>
+                                <p className="text-xs text-gray-500">External links integrated into your article structure.</p>
 
-                                {/* Mock Competitor 1 */}
-                                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
-                                    <h4 className="text-sm font-bold text-blue-600 dark:text-blue-400 truncate">1. SearchEngineJournal</h4>
-                                    <ul className="space-y-2">
-                                        <li className="text-xs text-gray-600 dark:text-gray-300 flex gap-2"><span className="font-bold text-gray-400">H2</span> What is the Core Concept?</li>
-                                        <li className="text-xs text-gray-600 dark:text-gray-300 flex gap-2"><span className="font-bold text-gray-400">H3</span> Key Benefits</li>
-                                        <li className="text-xs text-gray-600 dark:text-gray-300 flex gap-2"><span className="font-bold text-gray-400">H2</span> Future Trends</li>
-                                    </ul>
-                                </div>
-
-                                {/* Mock Competitor 2 */}
-                                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
-                                    <h4 className="text-sm font-bold text-blue-600 dark:text-blue-400 truncate">2. Hubspot Blog</h4>
-                                    <ul className="space-y-2">
-                                        <li className="text-xs text-gray-600 dark:text-gray-300 flex gap-2"><span className="font-bold text-gray-400">H2</span> Ultimate Strategy Guide</li>
-                                        <li className="text-xs text-gray-600 dark:text-gray-300 flex gap-2"><span className="font-bold text-gray-400">H3</span> Tools You Need</li>
-                                    </ul>
+                                <div className="space-y-3">
+                                    {outlineData.sourceUrls && outlineData.sourceUrls.map((url: string, index: number) => (
+                                        <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                                            <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 dark:text-blue-400 hover:underline break-all">
+                                                {url}
+                                            </a>
+                                        </div>
+                                    ))}
+                                    {(!outlineData.sourceUrls || outlineData.sourceUrls.length === 0) && (
+                                        <p className="text-sm text-gray-500 italic">No external sources used for generation.</p>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -225,19 +274,19 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                 <div className="space-y-4">
                                     <div>
                                         <label className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
-                                            Meta Title <span className="text-green-500 font-normal">58/60 chars</span>
+                                            Meta Title <span className="text-green-500 font-normal">{metaTitle.length}/60 chars</span>
                                         </label>
                                         <div className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300">
-                                            The Ultimate Guide to Generating AI Content in 2026
+                                            {metaTitle}
                                         </div>
                                     </div>
 
                                     <div>
                                         <label className="flex justify-between text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">
-                                            Meta Description <span className="text-green-500 font-normal">145/160 chars</span>
+                                            Meta Description <span className="text-green-500 font-normal">{metaDescription.length}/160 chars</span>
                                         </label>
                                         <div className="p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300">
-                                            Learn how to automate your content strategy using NLP models, dynamic schema generation, and programmatic SEO techniques.
+                                            {metaDescription}
                                         </div>
                                     </div>
 
@@ -249,10 +298,10 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                             <pre>{`{
   "@context": "https://schema.org",
   "@type": "Article",
-  "headline": "Generated Content",
+  "headline": "${metaTitle.replace(/"/g, '\\"')}",
   "author": {
     "@type": "Organization",
-    "name": "ContentForge"
+    "name": "ContentForge Engine"
   }
 }`}</pre>
                                         </div>
@@ -260,7 +309,6 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                 </div>
                             </div>
                         )}
-
                     </div>
                 </div>
             </div>

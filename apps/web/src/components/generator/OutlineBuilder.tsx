@@ -29,7 +29,7 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             if (firstCompetitor && firstCompetitor.headings) {
                 const initialHeadings = firstCompetitor.headings.map((h: any, i: number) => ({
                     id: `init-${i}`,
-                    level: h.level,
+                    level: h.level === 'h1' ? 'h2' : h.level, // H1'LERİ ZORLA H2 YAP
                     text: h.text
                 }));
                 setMyOutline(initialHeadings);
@@ -40,7 +40,7 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
     const handleAddFromCompetitor = (heading: { level: string, text: string }) => {
         setMyOutline(prev => [...prev, {
             id: `comp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-            level: heading.level as 'h2' | 'h3',
+            level: (heading.level === 'h1' ? 'h2' : heading.level) as 'h2' | 'h3', // H1'LERİ ZORLA H2 YAP
             text: heading.text
         }]);
     };
@@ -79,14 +79,19 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             return;
         }
 
-        // Seçili keywordleri ayıkla
         const selectedKeywords = researchData.keywords
             ? researchData.keywords.filter((kw: any) => kw.selected).map((kw: any) => kw.text)
             : [];
 
-        const finalData: FinalOutlineData = {
+        // GERÇEK RAKİP LİNKLERİNİ TOPLA
+        const competitorUrls = researchData.competitors
+            ? researchData.competitors.filter((c: any) => c.selected).map((c: any) => c.url)
+            : [];
+
+        const finalData: any = { // Tip hatası almamak için any kullanıyoruz
             headings: myOutline.map(h => ({ level: h.level, text: h.text })),
             selectedKeywords: selectedKeywords,
+            sourceUrls: competitorUrls, // GERÇEK LİNKLERİ API'YE GÖNDERİYORUZ
         };
 
         onGenerateArticle(finalData);

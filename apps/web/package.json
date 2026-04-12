@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
     "@contentforge/database": "workspace:*",
     "@headlessui/react": "^2.2.10",
     "@tiptap/extension-image": "^3.22.3",
@@ -17,6 +18,7 @@
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",
     "bcrypt": "^6.0.0",
+    "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",

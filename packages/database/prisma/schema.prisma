@@ -1,3 +1,5 @@
+// packages/database/prisma/schema.prisma
+
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
@@ -11,7 +13,7 @@ datasource db {
 }
 
 // ------------------------------------------------------
-// 1. USER & BILLING (Kullanıcı ve Kredi Sistemi)
+// 1. USER & BILLING
 // ------------------------------------------------------
 
 model User {
@@ -24,6 +26,7 @@ model User {
   updatedAt     DateTime  @updatedAt
 
   wallet        Wallet?
+  settings      UserSettings?
   contentJobs   ContentJob[]
 }
 
@@ -41,7 +44,7 @@ enum Role {
 }
 
 // ------------------------------------------------------
-// 2. MODULAR TOOLS & JOBS (Modüler Araçlar ve İşler)
+// 2. MODULAR TOOLS & JOBS
 // ------------------------------------------------------
 
 model Tool {
@@ -57,11 +60,11 @@ model ContentJob {
   id            String   @id @default(cuid())
   userId        String
   toolId        String
-  aiModel       AIModel  @default(CLAUDE_3_5_SONNET) // Varsayılan en iyi model
+  aiModel       AIModel  @default(CLAUDE_3_5_SONNET) // Default best model
   status        JobStatus @default(PENDING)
   
-  inputPayload  Json     // Kullanıcının formda girdiği veriler (keyword, language vs.)
-  outputContent String?  // Üretilen nihai HTML/Markdown
+  inputPayload  Json     // User input data (keyword, language, etc.)
+  outputContent String?  // Final generated HTML/Markdown
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -83,12 +86,28 @@ enum JobStatus {
 }
 
 // ------------------------------------------------------
-// 3. i18n TRANSLATIONS (Çoklu Dil Sistemi)
+// 3. i18n TRANSLATIONS
 // ------------------------------------------------------
 
 model Translation {
   id          String   @id @default(cuid())
   key         String   @unique // e.g., "auth.login.button"
-  enUS        String   // Ana dilimiz (Native American English)
-  trTR        String?  // Türkçe (Sonradan admin panelden doldurulacak)
+  enUS        String   // Primary language
+  trTR        String?  // Secondary language
+}
+
+// ------------------------------------------------------
+// 4. USER SETTINGS
+// ------------------------------------------------------
+
+model UserSettings {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  wpUrl         String?
+  wpUsername    String?
+  wpAppPassword String?
+  wpSitemap     String?
+  defaultStatus String   @default("draft")
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

@@ -172,17 +172,10 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                 />
                             )}
                             {block.type === 'image' && (
-                                <div className="my-8 rounded-xl border-2 border-dashed border-indigo-200 dark:border-indigo-900/50 bg-indigo-50/50 dark:bg-indigo-900/10 p-8 flex flex-col items-center justify-center text-center relative overflow-hidden group">
-                                    <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/5 to-purple-500/5 group-hover:opacity-100 transition-opacity" />
-                                    <ImageIcon size={40} className="text-indigo-400 mb-3" />
-                                    <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-1">AI Image Generated</h4>
-                                    <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70 max-w-md italic">
-                                        Prompt: "{block.content}"
-                                    </p>
-                                    <div className="mt-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-500 bg-indigo-100 dark:bg-indigo-900/40 px-3 py-1 rounded-full">
-                                        <Sparkles size={12} /> DALL-E / Imagen Pipeline
-                                    </div>
-                                </div>
+                                <div
+                                    className="my-8 animate-in fade-in zoom-in duration-500"
+                                    dangerouslySetInnerHTML={{ __html: block.content }}
+                                />
                             )}
                         </div>
                     ))}
