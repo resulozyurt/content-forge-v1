@@ -143,7 +143,7 @@ export default function Header() {
                                 <Menu.Item>
                                     {({ active }) => (
                                         <button
-                                            onClick={() => router.push(`/${locale}/dashboard/admin`)}
+                                            onClick={() => router.push(`/${locale}/admin`)}
                                             className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
                                         >
                                             <ShieldCheck size={16} className="mr-3" /> Admin Panel

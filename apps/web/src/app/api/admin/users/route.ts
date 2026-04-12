@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@contentforge/database";
 
-// Middleware utility to verify administrative privileges
+// Middleware utility to rigorously verify administrative privileges
 async function verifyAdminAccess() {
     const session = await getServerSession(authOptions);
     if (!session?.user || (session.user as any).role !== "ADMIN") {
@@ -17,8 +17,8 @@ export async function GET(req: Request) {
     try {
         await verifyAdminAccess();
 
-        // 1. Fetch all registered users along with their current wallet balances
-        const users = await db.user.findMany({
+        // 1. Retrieve all registered users alongside their current wallet ledgers
+        const users = await prisma.user.findMany({
             select: {
                 id: true,
                 email: true,
@@ -52,33 +52,33 @@ export async function PATCH(req: Request) {
 
         console.log(`[ADMIN_OPERATION] Executing '${action}' on user ${targetUserId}`);
 
-        // 2. Handle specific administrative actions
+        // 2. Process highly privileged administrative overrides
         switch (action) {
             case "UPDATE_ROLE":
-                // Elevate or demote user privileges
-                await db.user.update({
+                // Elevate or demote user access privileges
+                await prisma.user.update({
                     where: { id: targetUserId },
                     data: { role: payload.role }
                 });
                 break;
 
             case "ADD_CREDITS":
-                // Inject promotional or purchased credits directly into the user's ledger
+                // Inject promotional or purchased credits directly into the user's billing ledger
                 const amountToAdd = parseInt(payload.amount, 10);
                 if (isNaN(amountToAdd) || amountToAdd <= 0) throw new Error("Invalid credit allocation amount.");
                 
-                await db.$transaction([
-                    db.wallet.update({
+                await prisma.$transaction([
+                    prisma.wallet.update({
                         where: { userId: targetUserId },
                         data: { creditsAvailable: { increment: amountToAdd } }
                     }),
-                    // Maintain a strict audit trail for administrative credit injections
-                    db.transaction.create({
+                    // Maintain an immutable audit trail for administrative token injections
+                    prisma.transaction.create({
                         data: {
                             userId: targetUserId,
                             amount: amountToAdd,
                             type: "TOPUP",
-                            description: "Administrative credit allocation."
+                            description: "Administrative token allocation."
                         }
                     })
                 ]);
