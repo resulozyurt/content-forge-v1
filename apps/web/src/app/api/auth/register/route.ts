@@ -1,3 +1,4 @@
+// apps/web/src/app/api/auth/register/route.ts
 import { rateLimit, getRateLimitHeaders } from '@/lib/rate-limit';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
@@ -5,7 +6,6 @@ import { prisma } from '@contentforge/database';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
-
 
 /**
  * Configure the SMTP transporter using environment variables.
@@ -21,54 +21,57 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Inside POST function at the very beginning:
-const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
-const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000); // Strict limit: 5 registrations per hour per IP
-
-if (!limiter.success) {
-  return NextResponse.json(
-    { error: 'Too many registration attempts. Please try again in an hour.' }, 
-    { 
-        status: 429, 
-        headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
-    }
-  );
-}
-
 export async function POST(req: Request) {
   try {
+    // 1. Rate Limiting: Prevent registration spam attacks
+    const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
+    const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000); // Strict limit: 5 registrations per hour per IP
+
+    if (!limiter.success) {
+      return NextResponse.json(
+        { error: 'Too many registration attempts. Please try again in an hour.' }, 
+        { 
+            status: 429, 
+            headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+        }
+      );
+    }
+
     const { email, password } = await req.json();
 
     if (!email || !password) {
       return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
     }
 
-    // Verify if the user already exists in the registry to prevent duplicate accounts
+    // 2. Verify if the user already exists in the registry to prevent duplicate accounts
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return NextResponse.json({ error: 'This email address is already registered.' }, { status: 400 });
     }
 
-    // Encrypt the user's password utilizing bcrypt with a work factor of 10
+    // 3. Encrypt the user's password utilizing bcrypt with a work factor of 10
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // Generate a cryptographically secure 6-digit verification sequence
-    const otpCode = crypto.randomInt(100000, 999999).toString();
+    // 4. Generate a cryptographically secure 6-digit verification sequence
+    const plainOtpCode = crypto.randomInt(100000, 999999).toString();
+    
+    // 5. Secure the OTP code via hashing before persisting to the database
+    const hashedOtpCode = await bcrypt.hash(plainOtpCode, 10);
     
     // OTP validity window: Expires strictly 15 minutes from generation
     const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Persist the new user payload to the database
+    // 6. Persist the new user payload to the database
     await prisma.user.create({
       data: {
         email,
         passwordHash,
-        otpCode,
+        otpCode: hashedOtpCode, // Crucial: Store the hash, never the plain text
         otpExpiresAt,
       },
     });
 
-    // Construct the HTML payload for the OTP verification email
+    // 7. Construct the HTML payload for the OTP verification email using the plain code
     const mailOptions = {
       from: process.env.SMTP_FROM || '"Content Forge Security" <noreply@contentforge.ai>',
       to: email,
@@ -80,7 +83,7 @@ export async function POST(req: Request) {
             Welcome to Content Forge. To complete your registration and secure your account, please enter the following One-Time Password (OTP).
           </p>
           <div style="background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 24px; text-align: center; border-radius: 8px; margin: 32px 0;">
-            <span style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #2563eb;">${otpCode}</span>
+            <span style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #2563eb;">${plainOtpCode}</span>
           </div>
           <p style="color: #ef4444; font-size: 14px; text-align: center; font-weight: 500;">
             This security code will expire in exactly 15 minutes.
@@ -93,7 +96,7 @@ export async function POST(req: Request) {
       `,
     };
 
-    // Dispatch the verification email via the configured SMTP relay
+    // 8. Dispatch the verification email via the configured SMTP relay
     try {
       await transporter.sendMail(mailOptions);
       console.log(`[AUTH_PIPELINE] Verification sequence successfully dispatched to: ${email}`);
