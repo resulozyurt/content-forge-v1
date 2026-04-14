@@ -8,6 +8,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { prisma } from "@contentforge/database"; // CRITICAL: Imported Prisma to fetch the Brand Profile
 
 // Initialize AI SDK clients
 const openai = new OpenAI();
@@ -17,7 +18,6 @@ const anthropic = new Anthropic();
 export const maxDuration = 300;
 
 // Define a rigorous input validation schema to prevent malformed requests and injection
-// Note: sourceUrls strict .url() validation is relaxed to prevent scraped artifacts from triggering 400 errors
 const generationPayloadSchema = z.object({
     outlineData: z.object({
         headings: z.array(z.object({
@@ -33,7 +33,9 @@ const generationPayloadSchema = z.object({
         tone: z.string().optional().default("Highly Professional, Data-Driven, Authoritative"),
         depth: z.string().optional().default("Comprehensive"),
         engine: z.string().optional().default("gpt-4o"),
-        wpSitemap: z.string().optional().default("")
+        wpSitemap: z.string().optional().default(""),
+        targetLength: z.string().optional().default("1000"), // Word count objective
+        enableBrandVoice: z.boolean().optional().default(false) // Brand injection flag
     }).optional().default({})
 });
 
@@ -50,7 +52,7 @@ export async function POST(req: NextRequest) {
 
         const userId = (session.user as any).id;
         
-        // 2. Rate Limiting: 10 full article generations per hour per user (Includes IP for stricter security)
+        // 2. Rate Limiting: 10 full article generations per hour per user
         const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
         const limiter = await rateLimit(`gen_article_${userId}_${ip}`, 10, 60 * 60 * 1000);
 
@@ -69,7 +71,7 @@ export async function POST(req: NextRequest) {
 
         const ARTICLE_COST = 5;
 
-        // 3. Billing Guard: Verify available credits prior to initializing the generation pipeline
+        // 3. Billing Guard: Verify available credits prior to initialization
         await BillingGuard.checkCredits(userId, ARTICLE_COST);
 
         // 4. Input Validation via Zod Schema
@@ -94,26 +96,49 @@ export async function POST(req: NextRequest) {
         const depth = config.depth;
         const engine = config.engine;
         const wpSitemap = config.wpSitemap;
+        const totalHeadings = outlineData.headings.length;
 
-        // 6. Initialize Server-Sent Events (SSE) Stream Architecture
+        // Calculate dynamic word count per section to prevent LLM truncation
+        const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
+        const wordsPerSection = Math.max(100, Math.floor(targetTotalWords / totalHeadings));
+
+        // 6. Fetch Brand Identity (If Enabled)
+        let brandContext = "";
+        let brandNameContext = "";
+        if (config.enableBrandVoice) {
+            try {
+                const brandProfile = await prisma.brandProfile.findUnique({ where: { userId } });
+                if (brandProfile) {
+                    brandNameContext = brandProfile.name;
+                    brandContext = `\nBRAND IDENTITY INJECTION RULE:
+You MUST organically weave the following brand into the content as an authoritative solution, where contextually relevant.
+- Brand Name: ${brandProfile.name}
+- Core Offerings & Tone: ${brandProfile.description}
+${brandProfile.sitemapUrl ? `- Brand Sitemap/Links: Use this to guide internal linking: ${brandProfile.sitemapUrl}` : ''}
+CRITICAL: Do not make it sound like a cheap advertisement. Weave it naturally into the narrative as a premier industry solution.`;
+                }
+            } catch (brandError) {
+                console.warn("[BRAND_FETCH_WARNING]: Could not retrieve brand profile.", brandError);
+            }
+        }
+
+        // 7. Initialize Server-Sent Events (SSE) Stream Architecture
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream({
             async start(controller) {
-                // Utility function to dispatch formatted SSE chunks to the client
                 const sendEvent = (data: any) => {
                     const chunk = `data: ${JSON.stringify(data)}\n\n`;
                     controller.enqueue(encoder.encode(chunk));
                 };
 
-                // Utility function to gracefully terminate the stream
                 const closeStream = () => {
                     controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                     controller.close();
                 };
 
                 try {
-                    // 7. Dynamic Internal Link Pool Configuration
+                    // Dynamic Internal Link Pool Configuration
                     let internalLinks: string[] = [];
                     if (wpSitemap) {
                         try {
@@ -124,21 +149,20 @@ export async function POST(req: NextRequest) {
                                 internalLinks = matches.map(m => m[1]).filter(url => url.length > 10).slice(0, 20);
                             }
                         } catch (e) {
-                            console.warn("[SEO_PIPELINE_WARNING] Sitemap fetch timed out. Proceeding without dynamic internal linkage.");
+                            console.warn("[SEO_PIPELINE_WARNING] Sitemap fetch timed out.");
                         }
                     }
 
-                    // 8. External & Internal Source Link Directives
                     const sourceUrls = outlineData.sourceUrls;
                     const externalLinksContext = sourceUrls.length > 0 
-                        ? `EXTERNAL LINK RULE: You MUST organically insert ONE external link using EXACTLY one of these verified URLs: ${sourceUrls.join(', ')}. NEVER hallucinate or invent URLs. The anchor text must flow naturally within the context.`
+                        ? `EXTERNAL LINK RULE: You MUST organically insert ONE external link using EXACTLY one of these verified URLs: ${sourceUrls.join(', ')}. NEVER hallucinate or invent URLs.`
                         : `EXTERNAL LINK RULE: Do not add any external links as no verified sources were provided.`;
 
                     const internalLinksContext = internalLinks.length > 0
                         ? `INTERNAL LINK RULE: You MUST organically insert ONE internal link using a relevant URL from this list: ${internalLinks.join(', ')}. Format: <a href="[URL]" class="text-blue-600 hover:underline">[Anchor Text]</a>.`
                         : `INTERNAL LINK RULE: Skip internal linking altogether as no valid sitemap URLs were detected.`;
 
-                    // 9. Core SEO & NLP System Prompt
+                    // Core SEO & NLP System Prompt
                     const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
 Task: Write a high-density, expert-level section for the heading provided.
 
@@ -153,13 +177,14 @@ STRICT RULES:
 2. LANGUAGE: EXACTLY ${language}. If English, utilize Native American English phrasing exclusively.
 3. TONE: ${tone}.
 4. DEPTH: ${depth}.
-5. FORMAT: Return ONLY valid JSON.
-6. ${externalLinksContext}
-7. ${internalLinksContext}`;
+5. LENGTH TARGET: Write approximately ${wordsPerSection} words for this section. Ensure the narrative is complete and NEVER truncated.
+6. FORMAT: Return ONLY valid JSON.
+7. ${externalLinksContext}
+8. ${internalLinksContext}${brandContext}`;
 
                     let h2Counter = 0;
 
-                    // 10. Primary Generation Loop (Iterating through the user's outline)
+                    // Primary Generation Loop
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
@@ -179,7 +204,7 @@ STRICT RULES:
                             if (engine.toLowerCase().includes("claude")) {
                                 const msg = await anthropic.messages.create({
                                     model: "claude-3-5-sonnet-20240620",
-                                    max_tokens: 1500,
+                                    max_tokens: 3500, // CRITICAL: Increased heavily to prevent truncation
                                     system: systemPrompt,
                                     messages: [{ role: "user", content: userMessage }],
                                     temperature: 0.6,
@@ -201,7 +226,6 @@ STRICT RULES:
                                 rawContent = textCompletion.choices[0].message.content || "{}";
                             }
 
-                            // Robust JSON parsing to strip residual markdown artifacts
                             const cleanedRaw = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
                             const parsedData = JSON.parse(cleanedRaw);
                             
@@ -213,10 +237,9 @@ STRICT RULES:
                             generatedText = rawContent || "<p>The content pipeline encountered a formatting fault during execution.</p>";
                         }
 
-                        // Clean any remaining HTML wrappers generated by the LLM
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
 
-                        // B. Dispatch Content Blocks to the Client Immediately
+                        // B. Dispatch Content Blocks to the Client
                         sendEvent({
                             id: `h-${i}-${Date.now()}`,
                             type: heading.level,
@@ -229,20 +252,20 @@ STRICT RULES:
                             content: generatedText,
                         });
 
-                        // C. Visual Asset Prompt Engineering Execution (Every 2nd H2)
+                        // C. Visual Asset Prompt Engineering Execution (Every 2nd H2 - Isolated via GPT-4o)
                         if (heading.level === 'h2' && h2Counter % 2 === 0) {
                             try {
                                 const promptReq = await openai.chat.completions.create({
-                                    model: "gpt-4o",
+                                    model: "gpt-4o-mini", // Fast and reliable for prompt generation
                                     messages: [
                                         {
                                             role: "system",
-                                            content: `You are an elite AI image prompt engineer. Write a highly detailed, photorealistic image generation prompt tailored for a Midjourney v6 or Flow model. 
-                                            
+                                            content: `You are an elite AI image prompt engineer. Write a highly detailed, photorealistic image generation prompt tailored for a Midjourney v6 model. 
                                             CRITICAL RULES:
                                             1. The prompt MUST be authored in Native American English.
                                             2. Be highly descriptive, focusing on lighting, composition, and a corporate/tech aesthetic.
-                                            3. Output ONLY the raw prompt text, absolutely nothing else.`
+                                            ${brandNameContext ? `3. The image should subtly reflect the professional aesthetic of the brand: ${brandNameContext}.` : ''}
+                                            4. Output ONLY the raw prompt text, absolutely nothing else.`
                                         },
                                         {
                                             role: "user",
@@ -274,19 +297,17 @@ STRICT RULES:
                         }
                     }
 
-                    // 11. Finalize Transaction & Deduct Credits using precise categorization
+                    // 11. Finalize Transaction
                     await BillingGuard.deductCredits(userId, ARTICLE_COST, "GENERATION");
                     closeStream();
 
                 } catch (streamError) {
                     console.error("[STREAM_EXECUTION_FAULT]:", streamError);
-                    // Ensure the client receives the termination signal even on critical failures
                     closeStream(); 
                 }
             }
         });
 
-        // 12. Return the standard SSE response headers to keep the connection alive
         return new Response(stream, {
             headers: {
                 'Content-Type': 'text/event-stream',
@@ -298,7 +319,7 @@ STRICT RULES:
     } catch (error: any) {
         console.error("[PIPELINE_CRITICAL_FAILURE]:", error);
         return new Response(
-            JSON.stringify({ message: error.message || "A critical error occurred during the content generation initialization." }), 
+            JSON.stringify({ message: error.message || "A critical error occurred." }), 
             { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
     }
