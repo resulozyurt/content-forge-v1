@@ -1,30 +1,48 @@
 // apps/web/src/app/api/auth/register/route.ts
 import { NextResponse } from 'next/server';
-import { prisma } from '@contentforge/database'; // <-- FIXED: Changed from db to prisma
+import { prisma } from '@contentforge/database';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
+
+/**
+ * Configure the SMTP transporter using environment variables.
+ * For production, use reliable providers like AWS SES, SendGrid, or Mailgun.
+ */
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.gmail.com', // Fallback for local testing
+  port: parseInt(process.env.SMTP_PORT || '587', 10),
+  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
 
 export async function POST(req: Request) {
   try {
     const { email, password } = await req.json();
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email ve şifre zorunludur.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
     }
 
-    // Verify if the user already exists in the registry
+    // Verify if the user already exists in the registry to prevent duplicate accounts
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      return NextResponse.json({ error: 'Bu email adresi zaten kullanımda.' }, { status: 400 });
+      return NextResponse.json({ error: 'This email address is already registered.' }, { status: 400 });
     }
 
+    // Encrypt the user's password utilizing bcrypt with a work factor of 10
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // Generate a 6-digit verification sequence
+    // Generate a cryptographically secure 6-digit verification sequence
     const otpCode = crypto.randomInt(100000, 999999).toString();
+    
+    // OTP validity window: Expires strictly 15 minutes from generation
     const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Persist the new user to the database
+    // Persist the new user payload to the database
     await prisma.user.create({
       data: {
         email,
@@ -34,15 +52,48 @@ export async function POST(req: Request) {
       },
     });
 
-    console.log(`[EMAIL_SIMULATION] Verification code dispatched to ${email}: ${otpCode}`);
+    // Construct the HTML payload for the OTP verification email
+    const mailOptions = {
+      from: process.env.SMTP_FROM || '"Content Forge Security" <noreply@contentforge.ai>',
+      to: email,
+      subject: 'Verify Your Identity - Content Forge',
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;">
+          <h2 style="color: #111827; text-align: center; margin-bottom: 24px; font-size: 24px;">Verify Your Identity</h2>
+          <p style="color: #4b5563; font-size: 16px; line-height: 1.6; text-align: center;">
+            Welcome to Content Forge. To complete your registration and secure your account, please enter the following One-Time Password (OTP).
+          </p>
+          <div style="background-color: #f8fafc; border: 1px dashed #cbd5e1; padding: 24px; text-align: center; border-radius: 8px; margin: 32px 0;">
+            <span style="font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #2563eb;">${otpCode}</span>
+          </div>
+          <p style="color: #ef4444; font-size: 14px; text-align: center; font-weight: 500;">
+            This security code will expire in exactly 15 minutes.
+          </p>
+          <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0;" />
+          <p style="color: #9ca3af; font-size: 12px; text-align: center;">
+            If you did not initiate this request, please disregard this email. Your account remains secure.
+          </p>
+        </div>
+      `,
+    };
+
+    // Dispatch the verification email via the configured SMTP relay
+    try {
+      await transporter.sendMail(mailOptions);
+      console.log(`[AUTH_PIPELINE] Verification sequence successfully dispatched to: ${email}`);
+    } catch (emailError) {
+      console.error('[EMAIL_DISPATCH_FAULT]: Failed to route OTP email to the SMTP server.', emailError);
+      // We do not block the registration response here. If the email fails (e.g., bad SMTP config),
+      // the user is still created, but they will need to use a "Resend OTP" feature later once the SMTP is fixed.
+    }
 
     return NextResponse.json({ 
-      message: 'Kayıt başarılı. Lütfen e-postanıza gelen doğrulama kodunu girin.',
+      message: 'Registration successful. Please enter the verification code sent to your inbox.',
       requireOtp: true 
     }, { status: 201 });
 
   } catch (error) {
-    console.error('[REGISTRATION_FAULT]:', error);
-    return NextResponse.json({ error: 'Sunucu hatası oluştu.' }, { status: 500 });
+    console.error('[REGISTRATION_CRITICAL_FAULT]:', error);
+    return NextResponse.json({ error: 'A critical server error occurred during the registration sequence.' }, { status: 500 });
   }
 }
