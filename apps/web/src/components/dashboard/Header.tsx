@@ -2,7 +2,7 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { Moon, Sun, Bell, User, LogOut, Settings, ShieldCheck, Zap, Globe } from "lucide-react";
+import { Moon, Sun, Bell, User, LogOut, Settings, ShieldCheck, Zap, Globe, Building2 } from "lucide-react";
 import { Menu, Transition } from "@headlessui/react";
 import { Fragment, useEffect, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
@@ -151,6 +151,19 @@ export default function Header() {
                                     )}
                                 </Menu.Item>
                             )}
+
+                            {/* NEW: Brand Identity Menu Item */}
+                            <Menu.Item>
+                                {({ active }) => (
+                                    <button
+                                        onClick={() => router.push(`/${locale}/dashboard/brand`)}
+                                        className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
+                                    >
+                                        <Building2 size={16} className="mr-3" /> Brand Identity
+                                    </button>
+                                )}
+                            </Menu.Item>
+
                             <Menu.Item>
                                 {({ active }) => (
                                     <button
