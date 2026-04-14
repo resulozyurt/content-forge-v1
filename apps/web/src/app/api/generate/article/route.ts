@@ -3,6 +3,8 @@ import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
+import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
+import { z } from "zod";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -13,23 +15,25 @@ const anthropic = new Anthropic();
 // Extend the maximum execution duration for serverless environments (Vercel)
 export const maxDuration = 300;
 
-// Inside POST function:
-const userId = (session.user as any).id;
-// Limit: 10 full article generations per hour per user (highly expensive)
-const limiter = await rateLimit(`gen_article_${userId}`, 10, 60 * 60 * 1000);
-
-if (!limiter.success) {
-    return new Response(
-        JSON.stringify({ message: "Generation quota reached. Please check back in an hour." }), 
-        { 
-            status: 429, 
-            headers: { 
-                'Content-Type': 'application/json',
-                ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset)
-            } 
-        }
-    );
-}
+// Define a rigorous input validation schema to prevent malformed requests and injection
+const generationPayloadSchema = z.object({
+    outlineData: z.object({
+        headings: z.array(z.object({
+            id: z.string().optional(),
+            text: z.string(),
+            level: z.enum(['h2', 'h3'])
+        })).min(1, "The outline must contain at least one valid heading."),
+        selectedKeywords: z.array(z.string()).optional().default([]),
+        sourceUrls: z.array(z.string().url("All source URLs must be valid format.")).optional().default([]),
+    }),
+    config: z.object({
+        language: z.string().optional().default("English (US)"),
+        tone: z.string().optional().default("Highly Professional, Data-Driven, Authoritative"),
+        depth: z.string().optional().default("Comprehensive"),
+        engine: z.string().optional().default("gpt-4o"),
+        wpSitemap: z.string().optional().default("")
+    }).optional().default({})
+});
 
 export async function POST(req: NextRequest) {
     try {
@@ -43,28 +47,52 @@ export async function POST(req: NextRequest) {
         }
 
         const userId = (session.user as any).id;
+        
+        // 2. Rate Limiting: 10 full article generations per hour per user
+        const limiter = await rateLimit(`gen_article_${userId}`, 10, 60 * 60 * 1000);
+
+        if (!limiter.success) {
+            return new Response(
+                JSON.stringify({ message: "Generation quota reached. Please check back in an hour." }), 
+                { 
+                    status: 429, 
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset)
+                    } 
+                }
+            );
+        }
+
         const ARTICLE_COST = 5;
 
-        // 2. Billing Guard: Verify available credits prior to initializing the generation pipeline
+        // 3. Billing Guard: Verify available credits prior to initializing the generation pipeline
         await BillingGuard.checkCredits(userId, ARTICLE_COST);
 
-        const { outlineData, config } = await req.json();
+        // 4. Input Validation via Zod Schema
+        const rawBody = await req.json();
+        const parseResult = generationPayloadSchema.safeParse(rawBody);
 
-        if (!outlineData || !outlineData.headings) {
+        if (!parseResult.success) {
             return new Response(
-                JSON.stringify({ message: "Outline data payload is missing or corrupted." }), 
+                JSON.stringify({ 
+                    message: "Invalid payload provided. Please verify the request formatting.", 
+                    errors: parseResult.error.format() 
+                }), 
                 { status: 400, headers: { 'Content-Type': 'application/json' } }
             );
         }
 
-        // 3. Capture UI Configurations
-        const language = config?.language || "English (US)";
-        const tone = config?.tone || "Highly Professional, Data-Driven, Authoritative";
-        const depth = config?.depth || "Comprehensive";
-        const engine = config?.engine || "gpt-4o"; // Ensure fallback
-        const wpSitemap = config?.wpSitemap || "";
+        const { outlineData, config } = parseResult.data;
 
-        // 4. Initialize Server-Sent Events (SSE) Stream Architecture
+        // 5. Capture UI Configurations
+        const language = config.language;
+        const tone = config.tone;
+        const depth = config.depth;
+        const engine = config.engine;
+        const wpSitemap = config.wpSitemap;
+
+        // 6. Initialize Server-Sent Events (SSE) Stream Architecture
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream({
@@ -82,7 +110,7 @@ export async function POST(req: NextRequest) {
                 };
 
                 try {
-                    // 5. Dynamic Internal Link Pool Configuration
+                    // 7. Dynamic Internal Link Pool Configuration
                     let internalLinks: string[] = [];
                     if (wpSitemap) {
                         try {
@@ -97,8 +125,8 @@ export async function POST(req: NextRequest) {
                         }
                     }
 
-                    // 6. External & Internal Source Link Directives
-                    const sourceUrls = outlineData.sourceUrls || [];
+                    // 8. External & Internal Source Link Directives
+                    const sourceUrls = outlineData.sourceUrls;
                     const externalLinksContext = sourceUrls.length > 0 
                         ? `EXTERNAL LINK RULE: You MUST organically insert ONE external link using EXACTLY one of these verified URLs: ${sourceUrls.join(', ')}. NEVER hallucinate or invent URLs. The anchor text must flow naturally within the context.`
                         : `EXTERNAL LINK RULE: Do not add any external links as no verified sources were provided.`;
@@ -107,7 +135,7 @@ export async function POST(req: NextRequest) {
                         ? `INTERNAL LINK RULE: You MUST organically insert ONE internal link using a relevant URL from this list: ${internalLinks.join(', ')}. Format: <a href="[URL]" class="text-blue-600 hover:underline">[Anchor Text]</a>.`
                         : `INTERNAL LINK RULE: Skip internal linking altogether as no valid sitemap URLs were detected.`;
 
-                    // 7. Core SEO & NLP System Prompt
+                    // 9. Core SEO & NLP System Prompt
                     const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
 Task: Write a high-density, expert-level section for the heading provided.
 
@@ -128,12 +156,12 @@ STRICT RULES:
 
                     let h2Counter = 0;
 
-                    // 8. Primary Generation Loop (Iterating through the user's outline)
+                    // 10. Primary Generation Loop (Iterating through the user's outline)
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
 
-                        const targetKeyword = outlineData.selectedKeywords?.length > 0 
+                        const targetKeyword = outlineData.selectedKeywords.length > 0 
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
@@ -243,8 +271,8 @@ STRICT RULES:
                         }
                     }
 
-                    // 9. Finalize Transaction & Deduct Credits
-                    await BillingGuard.deductCredits(userId, ARTICLE_COST);
+                    // 11. Finalize Transaction & Deduct Credits using precise categorization
+                    await BillingGuard.deductCredits(userId, ARTICLE_COST, "GENERATION");
                     closeStream();
 
                 } catch (streamError) {
@@ -255,7 +283,7 @@ STRICT RULES:
             }
         });
 
-        // 10. Return the standard SSE response headers to keep the connection alive
+        // 12. Return the standard SSE response headers to keep the connection alive
         return new Response(stream, {
             headers: {
                 'Content-Type': 'text/event-stream',

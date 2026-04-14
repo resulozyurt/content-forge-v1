@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { Loader2, CheckCircle2, Sparkles, Code2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
+import DOMPurify from "isomorphic-dompurify"; // Required for XSS sanitization
 
 interface LiveGenerationProps {
     outlineData: FinalOutlineData;
@@ -211,16 +212,17 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                     {block.content}
                                 </h3>
                             )}
+                            {/* CRUCIAL: Prevent XSS attacks by sanitizing LLM output before injecting into the DOM */}
                             {block.type === 'paragraph' && (
                                 <p
                                     className="text-gray-600 dark:text-gray-300 leading-relaxed text-lg"
-                                    dangerouslySetInnerHTML={{ __html: block.content }}
+                                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(block.content) }}
                                 />
                             )}
                             {block.type === 'image' && (
                                 <div
                                     className="my-8 animate-in fade-in zoom-in duration-500"
-                                    dangerouslySetInnerHTML={{ __html: block.content }}
+                                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(block.content) }}
                                 />
                             )}
                         </div>
