@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, initialConfigData, ContentType, Language, AIModel, Tone, ContentDepth } from "@/types/generator";
 
@@ -11,10 +11,16 @@ interface GeneratorConfigProps {
 }
 
 export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProps) {
-    const [config, setConfig] = useState<GeneratorConfigData>(initialConfigData);
+    // Injecting fallback values for new feature properties to avoid undefined states
+    const [config, setConfig] = useState<GeneratorConfigData>({
+        ...initialConfigData,
+        targetLength: "1000",
+        enableBrandVoice: true
+    } as any);
+
     const [showAdvanced, setShowAdvanced] = useState(false);
 
-    const updateConfig = (field: keyof GeneratorConfigData, value: any) => {
+    const updateConfig = (field: string, value: any) => {
         setConfig((prev) => ({ ...prev, [field]: value }));
     };
 
@@ -44,7 +50,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
 
                         <select
                             value={config.contentType}
-                            onChange={(e) => updateConfig('contentType', e.target.value as ContentType)}
+                            onChange={(e) => updateConfig('contentType', e.target.value)}
                             className="bg-transparent border-b-2 border-dashed border-gray-300 dark:border-gray-700 text-blue-600 dark:text-blue-400 font-semibold focus:outline-none focus:border-blue-600 cursor-pointer pb-1 text-center sm:text-left"
                         >
                             <option value="blog_post">Blog Post</option>
@@ -95,11 +101,28 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             </label>
                             <select
                                 value={config.model}
-                                onChange={(e) => updateConfig('model', e.target.value as AIModel)}
+                                onChange={(e) => updateConfig('model', e.target.value)}
                                 className="w-full p-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
                             >
                                 <option value="claude-3-5-sonnet">Claude 3.5 Sonnet (Best for Writing)</option>
                                 <option value="gpt-4o">GPT-4o (Best for Logic)</option>
+                            </select>
+                        </div>
+
+                        {/* Target Length (Word Count Guardrails) */}
+                        <div className="space-y-2">
+                            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+                                <AlignLeft className="w-4 h-4 text-teal-500" /> Target Word Count
+                            </label>
+                            <select
+                                value={(config as any).targetLength || '1000'}
+                                onChange={(e) => updateConfig('targetLength', e.target.value)}
+                                className="w-full p-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
+                            >
+                                <option value="500">Short (~500 words)</option>
+                                <option value="1000">Medium (~1000 words)</option>
+                                <option value="1500">Long (~1500 words)</option>
+                                <option value="2000">In-Depth (2000+ words)</option>
                             </select>
                         </div>
 
@@ -110,7 +133,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             </label>
                             <select
                                 value={config.language}
-                                onChange={(e) => updateConfig('language', e.target.value as Language)}
+                                onChange={(e) => updateConfig('language', e.target.value)}
                                 className="w-full p-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
                             >
                                 <option value="en">English (US)</option>
@@ -125,7 +148,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             </label>
                             <select
                                 value={config.tone}
-                                onChange={(e) => updateConfig('tone', e.target.value as Tone)}
+                                onChange={(e) => updateConfig('tone', e.target.value)}
                                 className="w-full p-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
                             >
                                 <option value="professional">Professional & Authoritative</option>
@@ -149,6 +172,27 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                                 <option value="comprehensive">Comprehensive (In-depth Analysis)</option>
                                 <option value="exhaustive">Exhaustive (Pillar Content)</option>
                             </select>
+                        </div>
+
+                        {/* Brand Voice Injection Toggle */}
+                        <div className="md:col-span-2 mt-2 p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800/50 rounded-xl flex items-center justify-between">
+                            <div>
+                                <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 flex items-center gap-2">
+                                    <Building2 className="w-4 h-4" /> Enable Brand Voice & Contextual Insertion
+                                </h4>
+                                <p className="text-xs text-indigo-700 dark:text-indigo-400 mt-1 max-w-xl">
+                                    Dynamically inject your custom brand identity, core offerings, and internal links directly into the generated content for maximum SEO authority.
+                                </p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4">
+                                <input
+                                    type="checkbox"
+                                    checked={(config as any).enableBrandVoice !== false}
+                                    onChange={(e) => updateConfig('enableBrandVoice', e.target.checked)}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
+                            </label>
                         </div>
 
                     </div>
