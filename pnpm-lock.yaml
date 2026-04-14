@@ -35,6 +35,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.2.4)
+      '@google/generative-ai':
+        specifier: ^0.24.1
+        version: 0.24.1
       '@headlessui/react':
         specifier: ^2.2.10
         version: 2.2.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -476,6 +479,10 @@ packages:
 
   '@formatjs/intl-localematcher@0.8.2':
     resolution: {integrity: sha512-q05KMYGJLyqFNFtIb8NhWLF5X3aK/k0wYt7dnRFuy6aLQL+vUwQ1cg5cO4qawEiINybeCPXAWlprY2mSBjSXAQ==}
+
+  '@google/generative-ai@0.24.1':
+    resolution: {integrity: sha512-MqO+MLfM6kjxcKoy0p1wRzG3b4ZZXtPI+z2IE26UogS2Cm/XHO+7gGRBh6gcJsOiIVoH93UwKvW4HdgiOZCy9Q==}
+    engines: {node: '>=18.0.0'}
 
   '@headlessui/react@2.2.10':
     resolution: {integrity: sha512-5pVLNK9wlpxTUTy9GpgbX/SdcRh+HBnPktjM2wbiLTH4p+2EPHBO1aoSryUCuKUIItdDWO9ITlhUL8UnUN/oIA==}
@@ -3487,6 +3494,8 @@ snapshots:
   '@formatjs/intl-localematcher@0.8.2':
     dependencies:
       '@formatjs/fast-memoize': 3.1.1
+
+  '@google/generative-ai@0.24.1': {}
 
   '@headlessui/react@2.2.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:

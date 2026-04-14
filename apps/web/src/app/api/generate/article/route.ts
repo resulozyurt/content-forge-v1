@@ -8,7 +8,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { prisma } from "@contentforge/database"; // CRITICAL: Imported Prisma to fetch the Brand Profile
+import { prisma } from "@contentforge/database"; 
 
 // Initialize AI SDK clients
 const openai = new OpenAI();
@@ -199,12 +199,12 @@ STRICT RULES:
                         let generatedText = "";
                         let rawContent = "";
 
-                        // A. Dynamic Engine Routing
+                        // A. Dynamic Engine Routing (Text Generation)
                         try {
                             if (engine.toLowerCase().includes("claude")) {
                                 const msg = await anthropic.messages.create({
                                     model: "claude-3-5-sonnet-20240620",
-                                    max_tokens: 3500, // CRITICAL: Increased heavily to prevent truncation
+                                    max_tokens: 3500,
                                     system: systemPrompt,
                                     messages: [{ role: "user", content: userMessage }],
                                     temperature: 0.6,
@@ -252,47 +252,112 @@ STRICT RULES:
                             content: generatedText,
                         });
 
-                        // C. Visual Asset Prompt Engineering Execution (Every 2nd H2 - Isolated via GPT-4o)
+                        // C. Visual Asset Generation (Gemini 3.1 Flash / Nano Banana Logic)
                         if (heading.level === 'h2' && h2Counter % 2 === 0) {
                             try {
+                                // Adım 1: SEO ve Image Prompt Üretimi
                                 const promptReq = await openai.chat.completions.create({
-                                    model: "gpt-4o-mini", // Fast and reliable for prompt generation
+                                    model: "gpt-4o-mini", // Hızlı ve ekonomik prompt motoru
+                                    response_format: { type: "json_object" },
                                     messages: [
                                         {
                                             role: "system",
-                                            content: `You are an elite AI image prompt engineer. Write a highly detailed, photorealistic image generation prompt tailored for a Midjourney v6 model. 
+                                            content: `You are an expert art director and SEO specialist. 
+                                            TASK: Create a highly detailed image generation prompt and SEO metadata.
+                                            
                                             CRITICAL RULES:
-                                            1. The prompt MUST be authored in Native American English.
-                                            2. Be highly descriptive, focusing on lighting, composition, and a corporate/tech aesthetic.
-                                            ${brandNameContext ? `3. The image should subtly reflect the professional aesthetic of the brand: ${brandNameContext}.` : ''}
-                                            4. Output ONLY the raw prompt text, absolutely nothing else.`
+                                            1. The 'prompt' MUST be in English. The SEO fields must be in ${language}.
+                                            2. Style: ULTRA-REALISTIC, DSLR photography, 35mm lens, natural lighting. NO text in images.
+                                            ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameContext}.` : ''}
+                                            
+                                            Output EXACTLY in this JSON format:
+                                            {
+                                                "prompt": "Detailed description for the image generator",
+                                                "alt": "SEO Alt text describing the image",
+                                                "title": "SEO Title",
+                                                "caption": "Helpful visible caption for the reader"
+                                            }`
                                         },
                                         {
                                             role: "user",
-                                            content: `Generate a visually compelling image prompt for an article section titled: "${finalHeadingText}".`
+                                            content: `Create visual metadata for an article section titled: "${finalHeadingText}".`
                                         }
                                     ],
                                     temperature: 0.7,
                                 });
 
-                                const generatedPrompt = promptReq.choices[0].message.content?.trim();
+                                const promptDataRaw = promptReq.choices[0].message.content?.trim() || "{}";
+                                const promptData = JSON.parse(promptDataRaw);
 
-                                if (generatedPrompt) {
-                                    const promptHtmlContext = `
-                                        <div class="ai-prompt-container border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
-                                            <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 block">Visual Asset Generation Prompt</span>
-                                            <p class="text-gray-800 font-mono text-sm leading-relaxed">${generatedPrompt}</p>
-                                        </div>
-                                    `;
+                                if (promptData.prompt) {
+                                    // Adım 2: Gemini API'den Base64 Resmi Çekme
+                                    const geminiApiKey = process.env.GEMINI_API_KEY;
+                                    let b64Image = "";
 
-                                    sendEvent({
-                                        id: `img-prompt-${i}-${Date.now()}`,
-                                        type: 'image',
-                                        content: promptHtmlContext,
-                                    });
+                                    if (geminiApiKey) {
+                                        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`;
+                                        const geminiPayload = {
+                                            contents: [
+                                                {
+                                                    parts: [
+                                                        { text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }
+                                                    ]
+                                                }
+                                            ]
+                                        };
+
+                                        const geminiRes = await fetch(geminiUrl, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(geminiPayload)
+                                        });
+
+                                        if (geminiRes.ok) {
+                                            const geminiData = await geminiRes.json();
+                                            const parts = geminiData.candidates?.[0]?.content?.parts || [];
+                                            for (const part of parts) {
+                                                if (part.inlineData && part.inlineData.data) {
+                                                    b64Image = part.inlineData.data;
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            console.error("[GEMINI_API_ERROR]: Failed to fetch image.", await geminiRes.text());
+                                        }
+                                    } else {
+                                        console.warn("[GEMINI_MISSING_KEY]: GEMINI_API_KEY not found in environment variables.");
+                                    }
+
+                                    // Adım 3: Base64 Görseli veya Fallback Metnini HTML olarak Editöre İletme
+                                    if (b64Image) {
+                                        const imgHtml = `
+                                            <figure class="my-8">
+                                                <img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200 dark:border-gray-800" />
+                                                <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
+                                            </figure>
+                                        `;
+                                        sendEvent({
+                                            id: `img-${i}-${Date.now()}`,
+                                            type: 'image',
+                                            content: imgHtml,
+                                        });
+                                    } else {
+                                        // Gemini hata verirse makale üretimini bozmamak için promptu ekrana bas (Fallback)
+                                        const fallbackHtml = `
+                                            <div class="ai-prompt-container border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
+                                                <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 block">Visual Asset Pending (API Error)</span>
+                                                <p class="text-gray-800 font-mono text-sm leading-relaxed">${promptData.prompt}</p>
+                                            </div>
+                                        `;
+                                        sendEvent({
+                                            id: `img-prompt-${i}-${Date.now()}`,
+                                            type: 'image',
+                                            content: fallbackHtml,
+                                        });
+                                    }
                                 }
                             } catch (promptError) {
-                                console.error("[PROMPT_FAULT] Failed to generate visual asset prompt:", promptError);
+                                console.error("[IMAGE_GENERATION_FAULT]:", promptError);
                             }
                         }
                     }
