@@ -4,6 +4,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useLocale } from "next-intl"; // CRITICAL: Added to resolve routing mismatch
 import { Search, Filter, FileText, Calendar, Edit3, Trash2, ExternalLink, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +13,9 @@ export default function HistoryPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("All");
+
     const router = useRouter();
+    const locale = useLocale();
 
     useEffect(() => {
         const fetchHistory = async () => {
@@ -23,7 +26,7 @@ export default function HistoryPage() {
                     setDocuments(data.jobs || []);
                 }
             } catch (error) {
-                console.error("Failed to fetch history:", error);
+                console.error("[HISTORY_FETCH_FAULT]: Failed to retrieve documents.", error);
             } finally {
                 setIsLoading(false);
             }
@@ -54,14 +57,14 @@ export default function HistoryPage() {
 
     // Execute secure document deletion
     const handleDelete = async (id: string) => {
-        if (!confirm("Are you certain you wish to delete this document from the registry?")) return;
+        if (!confirm("Are you certain you wish to permanently delete this document from the registry?")) return;
         try {
             const res = await fetch(`/api/documents/delete?id=${id}`, { method: 'DELETE' });
             if (res.ok) {
                 setDocuments(docs => docs.filter(d => d.id !== id));
             }
         } catch (error) {
-            alert("Failed to delete document from the cluster.");
+            alert("Failed to purge document from the cluster.");
         }
     };
 
@@ -96,7 +99,7 @@ export default function HistoryPage() {
                     </p>
                 </div>
                 <Link
-                    href="/dashboard/generator"
+                    href={`/${locale}/dashboard/generator`}
                     className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-bold rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                 >
                     + New Document
@@ -199,8 +202,9 @@ export default function HistoryPage() {
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                             <div className="flex items-center justify-end gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                                                {/* CRITICAL: Properly formatted routing sequence for document retrieval */}
                                                 <button
-                                                    onClick={() => router.push('/dashboard/generator?edit=' + doc.id)}
+                                                    onClick={() => router.push(`/${locale}/dashboard/editor/${doc.id}`)}
                                                     className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Open in Editor">
                                                     <Edit3 className="w-4 h-4" />
                                                 </button>
