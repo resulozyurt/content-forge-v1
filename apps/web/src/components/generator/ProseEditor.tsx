@@ -7,9 +7,10 @@ import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
 import TurndownService from 'turndown';
+import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import {
-    Download, UploadCloud, CheckCircle2, Activity, Target,
+    UploadCloud, CheckCircle2, Activity, Target,
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
     Loader2, AlertCircle, SpellCheck, Copy
 } from "lucide-react";
@@ -36,16 +37,18 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
     const [keywordStatus, setKeywordStatus] = useState<Record<string, boolean>>({});
 
     /**
-     * Reconstructs a valid DOM string representation from the generated AI blocks.
+     * Reconstructs a valid, sanitized DOM string representation from the generated AI blocks.
      */
     const generateHTMLFromBlocks = useCallback(() => {
-        return blocks.map(block => {
+        const rawHtml = blocks.map(block => {
             if (block.type === 'h2') return `<h2>${block.content}</h2>`;
             if (block.type === 'h3') return `<h3>${block.content}</h3>`;
             if (block.type === 'paragraph') return `<p>${block.content}</p>`;
             if (block.type === 'image') return block.content;
             return '';
         }).join('');
+
+        return DOMPurify.sanitize(rawHtml);
     }, [blocks]);
 
     // Dynamic extraction for SEO meta payload
@@ -104,7 +107,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
         immediatelyRender: false,
         editorProps: {
             attributes: {
-                class: 'prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px]',
+                class: 'prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px] p-4',
             },
         },
         onUpdate({ editor }) {
@@ -200,7 +203,9 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
             if (!response.ok) throw new Error("The NLP transformation pipeline failed.");
 
             const data = await response.json();
-            editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, data.result).run();
+            // Sanitize the AI response before injecting into the DOM
+            const sanitizedHtml = DOMPurify.sanitize(data.result);
+            editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, sanitizedHtml).run();
 
         } catch (error: any) {
             console.error("[EDITOR_AI_FAULT]:", error);
@@ -211,18 +216,76 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
         }
     };
 
+    /**
+     * Triggers the full-document NLP proofreading pipeline.
+     */
     const handleProofread = async () => {
-        // Implementation stub (Existing)
         if (!editor || isProofreading) return;
-        setIsProofreading(true);
-        setTimeout(() => setIsProofreading(false), 2000); // Mock processing time
+
+        try {
+            setIsProofreading(true);
+            const currentHtml = editor.getHTML();
+
+            const response = await fetch('/api/generate/proofread', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    htmlContent: currentHtml,
+                    // Retrieve language context if available, fallback to US English
+                    language: (outlineData as any).config?.language || "English (US)"
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || "The proofreading service is currently unavailable.");
+            }
+
+            const data = await response.json();
+
+            // Overwrite the canvas with the highly sanitized, corrected DOM
+            editor.commands.setContent(DOMPurify.sanitize(data.result));
+            alert("Success: The document has been grammatically optimized.");
+
+        } catch (error: any) {
+            console.error("[PROOFREAD_EXECUTION_FAULT]:", error);
+            alert(`Proofreading Failed: ${error.message}`);
+        } finally {
+            setIsProofreading(false);
+        }
     };
 
+    /**
+     * Transmits the finalized document directly to the user's WordPress instance via REST API.
+     */
     const handleWPPublish = async () => {
-        // Implementation stub (Existing)
         if (!editor || isPublishing) return;
-        setIsPublishing(true);
-        setTimeout(() => setIsPublishing(false), 2000); // Mock publishing time
+
+        try {
+            setIsPublishing(true);
+            const response = await fetch('/api/documents/publish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: metaTitle,
+                    content: editor.getHTML()
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || "Failed to establish a secure connection with the WordPress target.");
+            }
+
+            const data = await response.json();
+            alert(`Transmission Successful: Document deployed to WordPress. Post ID: ${data.postId}`);
+
+        } catch (error: any) {
+            console.error("[WP_TRANSMISSION_FAULT]:", error);
+            alert(`WordPress Integration Error: ${error.message}`);
+        } finally {
+            setIsPublishing(false);
+        }
     };
 
     if (!editor) return null;
@@ -350,7 +413,7 @@ export default function ProseEditor({ blocks, outlineData }: ProseEditorProps) {
                                 </div>
                             </div>
                         )}
-                        {/* Diğer sekmeler aynı kalıyor (Research & Technical) */}
+
                         {activeTab === 'research' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider"><Layout size={16} className="text-purple-500" /> Source URLs Utilized</h3>

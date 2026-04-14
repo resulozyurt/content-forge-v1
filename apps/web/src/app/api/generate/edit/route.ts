@@ -75,7 +75,7 @@ export async function POST(req: Request) {
         const resultText = completion.choices[0].message.content?.trim().replace(/```html|```/g, '') || text;
 
         // 6. Finalize the transaction
-        await BillingGuard.deductCredits(userId, EDIT_COST);
+        await BillingGuard.deductCredits(userId, EDIT_COST, "EDIT");
 
         return NextResponse.json({ result: resultText }, { status: 200 });
 

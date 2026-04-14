@@ -98,7 +98,7 @@ CRITICAL DIRECTIVES:
         }
 
         // 7. Finalize Transaction & Deduct Credits
-        await BillingGuard.deductCredits(userId, PROOFREAD_COST);
+        await BillingGuard.deductCredits(userId, PROOFREAD_COST, "PROOFREAD");
         console.log(`[SUCCESS] Document proofreading completed. Deducted ${PROOFREAD_COST} credit(s) from user ${userId}.`);
 
         return NextResponse.json({ result: parsedData.result }, { status: 200 });
