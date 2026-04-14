@@ -1,44 +1,58 @@
-// apps/web/src/lib/billing.ts
 import { prisma } from "@contentforge/database";
 
-export class BillingGuard {
-  static async checkCredits(userId: string, requiredCredits: number = 1): Promise<string> {
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId },
-    });
-
-    if (!wallet || wallet.creditsAvailable < requiredCredits) {
-      throw new Error(`Insufficient balance. This operation requires ${requiredCredits} credits.`);
-    }
-
-    return wallet.id;
-  }
-
-  static async deductCredits(
-    userId: string, 
-    amount: number = 1, 
-    type: "RESEARCH" | "GENERATION" | "EDIT" | "PROOFREAD",
-    description?: string
-  ): Promise<void> {
-    await prisma.$transaction([
-      prisma.wallet.update({
+/**
+ * Safely deducts user credits utilizing a Prisma $transaction.
+ * This ensures atomicity and prevents race conditions where concurrent API requests
+ * might bypass balance checks, effectively eliminating the risk of negative balances.
+ *
+ * @param userId - Unique identifier of the target user.
+ * @param amount - Quantity of credits to be deducted.
+ * @param type - Categorization of the transaction.
+ * @param description - Optional telemetry or audit log context.
+ * @returns Boolean indicating the success of the transaction.
+ */
+export async function deductCredits(
+  userId: string,
+  amount: number,
+  type: "RESEARCH" | "GENERATION" | "EDIT" | "PROOFREAD" | "TOPUP",
+  description?: string
+): Promise<boolean> {
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. Retrieve the wallet state within the transaction context
+      const wallet = await tx.wallet.findUnique({
         where: { userId },
+      });
+
+      // 2. Validate sufficient funds strictly before proceeding
+      if (!wallet || wallet.creditsAvailable < amount) {
+        throw new Error("Insufficient credits available in the user wallet.");
+      }
+
+      // 3. Execute the atomic deduction
+      await tx.wallet.update({
+        where: { id: wallet.id },
         data: {
           creditsAvailable: {
-            decrement: amount
-          }
-        }
-      }),
-      prisma.transaction.create({
+            decrement: amount,
+          },
+        },
+      });
+
+      // 4. Record the audit trail
+      await tx.transaction.create({
         data: {
           userId,
           amount: -amount,
           type,
-          description
-        }
-      })
-    ]);
-    
-    console.log(`[BILLING_LEDGER] Successfully logged ${amount} credit deduction for user ${userId}.`);
+          description: description || `Automated deduction: ${amount} credits allocated for ${type.toLowerCase()}.`,
+        },
+      });
+    });
+
+    return true;
+  } catch (error) {
+    console.error("[BILLING_GUARD_FAULT]: Failed to process credit transaction.", error);
+    return false;
   }
 }

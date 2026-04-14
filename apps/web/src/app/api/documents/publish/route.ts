@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@contentforge/database";
 import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { decrypt } from "@/lib/encryption";
 
 export async function POST(req: Request) {
     try {
@@ -66,8 +67,20 @@ export async function POST(req: Request) {
         
         const wpApiEndpoint = `${targetUrl}/wp-json/wp/v2/posts`;
 
-        // 6. Construct Basic Auth Token using Application Passwords
-        const authString = `${userSettings.wpUsername.trim()}:${userSettings.wpAppPassword.trim()}`;
+        // 6. Decrypt the Application Password and construct the Basic Auth Token
+        let plainPassword: string;
+        try {
+            // Decrypt the AES/ChaCha encrypted payload from the database
+            plainPassword = decrypt(userSettings.wpAppPassword);
+        } catch (cryptoError) {
+            console.error("[CRYPTO_DECRYPTION_FAULT]: Failed to unseal WP App Password.", cryptoError);
+            return NextResponse.json(
+                { error: "Failed to authenticate with WordPress due to a cryptographic key mismatch." },
+                { status: 500 }
+            );
+        }
+
+        const authString = `${userSettings.wpUsername.trim()}:${plainPassword.trim()}`;
         const encodedAuth = Buffer.from(authString).toString('base64');
 
         // 7. Dispatch Payload to WordPress REST API
