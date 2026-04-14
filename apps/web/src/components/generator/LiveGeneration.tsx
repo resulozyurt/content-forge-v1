@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { Loader2, CheckCircle2, Sparkles, Code2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
-import DOMPurify from "isomorphic-dompurify"; // Required for XSS sanitization
+import DOMPurify from "isomorphic-dompurify";
 
 interface LiveGenerationProps {
     outlineData: FinalOutlineData;
@@ -20,19 +20,19 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
     const [error, setError] = useState<string | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
-    const hasStarted = useRef(false); // Prevents React Strict Mode double-execution
+    const executionLock = useRef(false); // CRITICAL: Strict Mode kilidi
+    const abortControllerRef = useRef<AbortController | null>(null);
 
-    // Auto-scroll mechanism to keep the latest generated content in view
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [blocks, currentTask]);
 
-    // REAL-TIME API CONNECTION AND STREAM PARSING
     useEffect(() => {
-        if (hasStarted.current) return;
-        hasStarted.current = true;
+        // Dev Mode'da çift çalışmayı (Double execution) kesin olarak engelle
+        if (executionLock.current) return;
+        executionLock.current = true;
         let isMounted = true;
 
         const generateArticle = async () => {
@@ -40,13 +40,24 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 setProgress(10);
                 setCurrentTask("Connecting to generation pipeline...");
 
-                // 1. Dispatch POST request to the SSE streaming endpoint
+                abortControllerRef.current = new AbortController();
+
+                // Sanitize the config payload to ensure Zod validation passes
+                const sanitizedConfig = {
+                    language: "English (US)",
+                    tone: "Highly Professional, Data-Driven, Authoritative",
+                    depth: "Comprehensive",
+                    engine: "gpt-4o",
+                    wpSitemap: ""
+                };
+
                 const response = await fetch('/api/generate/article', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    signal: abortControllerRef.current.signal,
                     body: JSON.stringify({
                         outlineData: outlineData,
-                        config: {} // Extensible configuration payload (model, language, etc.)
+                        config: sanitizedConfig
                     })
                 });
 
@@ -56,22 +67,18 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 }
 
                 if (!response.body) {
-                    throw new Error("ReadableStream architecture is not supported by the current server response.");
+                    throw new Error("ReadableStream architecture is not supported.");
                 }
 
                 setProgress(25);
                 setCurrentTask("Stream established. Awaiting incoming content blocks...");
 
-                // 2. Initialize the stream reader and text decoder
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
                 let done = false;
-
-                // Track blocks internally to update progress dynamically
                 let processedBlocksCount = 0;
                 const estimatedTotalBlocks = (outlineData.headings?.length || 5) * 2;
 
-                // 3. Process the incoming chunked data stream continuously
                 while (!done) {
                     const { value, done: readerDone } = await reader.read();
                     done = readerDone;
@@ -84,7 +91,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                             if (line.startsWith("data: ")) {
                                 const dataStr = line.replace("data: ", "").trim();
 
-                                // Detect the termination signal from the backend
                                 if (dataStr === "[DONE]") {
                                     if (isMounted) {
                                         setIsFinished(true);
@@ -98,11 +104,13 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                     const parsedBlock = JSON.parse(dataStr) as GeneratedBlock;
                                     processedBlocksCount++;
 
-                                    // Append the new block to the UI state incrementally
                                     if (isMounted) {
-                                        setBlocks((prev) => [...prev, parsedBlock]);
+                                        setBlocks((prev) => {
+                                            // Duplicate blok oluşmasını engelle (react rendering bug fix)
+                                            if (prev.some(b => b.id === parsedBlock.id)) return prev;
+                                            return [...prev, parsedBlock];
+                                        });
 
-                                        // Update the dynamic status indicator based on the block type
                                         if (parsedBlock.type === 'h2' || parsedBlock.type === 'h3') {
                                             setCurrentTask(`Drafting section: ${parsedBlock.content.substring(0, 40)}...`);
                                         } else if (parsedBlock.type === 'paragraph') {
@@ -111,12 +119,11 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                             setCurrentTask(`Engineering precise text prompts for visual assets...`);
                                         }
 
-                                        // Calculate a smooth progress curve based on received chunks
                                         const currentProgress = 25 + Math.min((processedBlocksCount / estimatedTotalBlocks) * 70, 70);
                                         setProgress(currentProgress);
                                     }
                                 } catch (e) {
-                                    console.warn("[STREAM_PARSE_WARNING] Encountered a fragmented chunk, skipping rendering.", e);
+                                    // Fragmented chunk, safely ignore
                                 }
                             }
                         }
@@ -124,22 +131,27 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 }
 
             } catch (err: any) {
+                if (err.name === 'AbortError') return; // Bileşen unmount olduysa hatayı yoksay
                 console.error("[GENERATION_FAULT]:", err);
                 if (isMounted) {
-                    setError(err.message || "A critical fault interrupted the generation sequence.");
-                    setCurrentTask("Process halted due to an error.");
+                    setError(err.message || "A critical fault interrupted the sequence.");
+                    setCurrentTask("Process halted.");
                 }
             }
         };
 
         generateArticle();
 
-        return () => { isMounted = false; };
+        return () => {
+            isMounted = false;
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort(); // Unmount sırasında stream'i öldür
+            }
+        };
     }, [outlineData]);
 
     return (
         <div className="w-full max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in-95 duration-500">
-
             {/* Header & Progress Bar */}
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
@@ -212,7 +224,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                     {block.content}
                                 </h3>
                             )}
-                            {/* CRUCIAL: Prevent XSS attacks by sanitizing LLM output before injecting into the DOM */}
                             {block.type === 'paragraph' && (
                                 <p
                                     className="text-gray-600 dark:text-gray-300 leading-relaxed text-lg"
@@ -228,7 +239,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                         </div>
                     ))}
 
-                    {/* Blinking Cursor */}
                     {!isFinished && !error && blocks.length > 0 && (
                         <div className="w-3 h-6 bg-blue-500 animate-pulse mt-4"></div>
                     )}

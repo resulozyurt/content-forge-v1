@@ -28,19 +28,19 @@ export default async function RootLayout({
   children: React.ReactNode;
   params: Promise<{ locale: string }>;
 }>) {
-  // Next.js 15/16 mimarisinde params bir Promise'dir, önce çözümlüyoruz
+  // Resolve the asynchronous params Promise mandated by Next.js 15+ architecture
   const resolvedParams = await params;
 
-  // O anki dile ait tüm çeviri sözlüğünü (en.json) arka plandan çekiyoruz
+  // Retrieve the localized dictionary payload for the current session
   const messages = await getMessages();
 
   return (
+    // CRITICAL: suppressHydrationWarning blocks browser extensions from triggering mismatch faults
     <html lang={resolvedParams.locale} suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-white dark:bg-gray-950 antialiased`}
         suppressHydrationWarning
       >
-        {/* İstemci bileşenleri (Sidebar vb.) dilleri okuyabilsin diye sarmalıyoruz */}
         <NextIntlClientProvider messages={messages}>
           <Providers>
             {children}

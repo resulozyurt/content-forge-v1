@@ -3,9 +3,9 @@ import createMiddleware from 'next-intl/middleware';
 import { withAuth } from "next-auth/middleware";
 import { NextRequest } from 'next/server';
 
-// 1. Expand the routing interceptor to recognize the Turkish locale
 const locales = ['en', 'tr']; 
-const publicPages = ['/auth/login', '/auth/register'];
+// Designate root and authentication paths as publicly accessible perimeters
+const publicPages = ['/', '/auth/login', '/auth/register'];
 
 const intlMiddleware = createMiddleware({
   locales,
@@ -26,7 +26,8 @@ const authMiddleware = withAuth(
   }
 );
 
-export default function middleware(req: NextRequest) {
+// CRITICAL: Next.js 16 deprecates 'middleware' in favor of the 'proxy' convention
+export default function proxy(req: NextRequest) {
   const publicPathnameRegex = RegExp(
     `^(/(${locales.join('|')}))?(${publicPages.join('|')})?/?$`,
     'i'
@@ -41,5 +42,7 @@ export default function middleware(req: NextRequest) {
 }
 
 export const config = {
+  // CRITICAL: Bypass the internationalization interceptor for API routes and static assets.
+  // Failing to enforce this exclusion will corrupt NextAuth endpoints, resulting in 404 HTML errors.
   matcher: ['/((?!api|_next|.*\\..*).*)']
 };

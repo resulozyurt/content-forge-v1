@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
 import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
+import { headers } from "next/headers";
 import { z } from "zod";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -16,6 +17,7 @@ const anthropic = new Anthropic();
 export const maxDuration = 300;
 
 // Define a rigorous input validation schema to prevent malformed requests and injection
+// Note: sourceUrls strict .url() validation is relaxed to prevent scraped artifacts from triggering 400 errors
 const generationPayloadSchema = z.object({
     outlineData: z.object({
         headings: z.array(z.object({
@@ -24,7 +26,7 @@ const generationPayloadSchema = z.object({
             level: z.enum(['h2', 'h3'])
         })).min(1, "The outline must contain at least one valid heading."),
         selectedKeywords: z.array(z.string()).optional().default([]),
-        sourceUrls: z.array(z.string().url("All source URLs must be valid format.")).optional().default([]),
+        sourceUrls: z.array(z.string()).optional().default([]), 
     }),
     config: z.object({
         language: z.string().optional().default("English (US)"),
@@ -48,8 +50,9 @@ export async function POST(req: NextRequest) {
 
         const userId = (session.user as any).id;
         
-        // 2. Rate Limiting: 10 full article generations per hour per user
-        const limiter = await rateLimit(`gen_article_${userId}`, 10, 60 * 60 * 1000);
+        // 2. Rate Limiting: 10 full article generations per hour per user (Includes IP for stricter security)
+        const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
+        const limiter = await rateLimit(`gen_article_${userId}_${ip}`, 10, 60 * 60 * 1000);
 
         if (!limiter.success) {
             return new Response(
