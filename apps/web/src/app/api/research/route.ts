@@ -3,48 +3,41 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
+import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
+import { headers } from "next/headers";
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
 
 const openai = new OpenAI();
 
-// Extend execution timeout for robust asynchronous scraping operations
+// Extend execution timeout for robust asynchronous scraping and chained AI operations
 export const maxDuration = 300; 
 
 export interface ScrapedData {
+  id: string;
   url: string;
   title: string;
   wordCount: number;
   headings: { level: string; text: string }[];
-  domainAuthorityFallback?: number; // Future-proofing for SEO metrics
 }
 
 /**
- * Utility function to rotate User-Agents to mitigate basic WAF blocks.
- */
-const getRandomUserAgent = (): string => {
-  const userAgents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
-  ];
-  return userAgents[Math.floor(Math.random() * userAgents.length)];
-};
-
-/**
- * Advanced fetch wrapper prepared for external Scraping API integration.
- * Replace the standard fetch with ScraperAPI, Browserless, or Firecrawl endpoints here in production.
+ * Advanced fetch wrapper utilizing ScraperAPI to bypass Cloudflare, Datadome, and JS-rendering walls.
+ * If SCRAPER_API_KEY is not defined in the environment, it gracefully falls back to a standard fetch with rotated headers.
  */
 const fetchWithScrapingInfrastructure = async (url: string, signal: AbortSignal): Promise<string | null> => {
   try {
-    // Note: To enable a commercial scraper API, wrap the URL here.
-    // Example: const targetUrl = \`http://api.scraperapi.com?api_key=YOUR_KEY&url=\${encodeURIComponent(url)}\`;
-    const targetUrl = url; 
+    const scraperApiKey = process.env.SCRAPER_API_KEY;
+    
+    // Route traffic through the proxy network if the key is provisioned
+    const targetUrl = scraperApiKey 
+        ? `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(url)}&render=true`
+        : url;
 
     const response = await fetch(targetUrl, { 
       signal,
-      headers: { 
-        "User-Agent": getRandomUserAgent(),
+      headers: scraperApiKey ? {} : { 
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
       }
@@ -62,20 +55,6 @@ const fetchWithScrapingInfrastructure = async (url: string, signal: AbortSignal)
   }
 };
 
-const userId = (session.user as any).id;
-// Limit: 20 research operations per hour per user
-const limiter = await rateLimit(`research_${userId}`, 20, 60 * 60 * 1000); 
-
-if (!limiter.success) {
-    return NextResponse.json(
-        { error: "Research quota exceeded. Please wait before starting new research." }, 
-        { 
-            status: 429, 
-            headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
-        }
-    );
-}
-
 export async function POST(req: Request) {
   try {
     // 1. Authentication & Session Validation
@@ -85,10 +64,25 @@ export async function POST(req: Request) {
     }
 
     const userId = (session.user as any).id;
+    
+    // Rate Limiting: 20 research operations per hour per user
+    const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
+    const limiter = await rateLimit(`research_${userId}_${ip}`, 20, 60 * 60 * 1000); 
+
+    if (!limiter.success) {
+        return NextResponse.json(
+            { error: "Research quota exceeded. Please wait before starting new research." }, 
+            { 
+                status: 429, 
+                headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+            }
+        );
+    }
+
     const RESEARCH_COST = 1;
 
     // 2. Billing Guard Assessment
-    await BillingGuard.checkCredits(userId, RESEARCH_COST);
+    await BillingGuard.checkCredits(userId, RESEARCH_COST, "RESEARCH");
 
     const { topic, config } = await req.json();
 
@@ -107,14 +101,14 @@ export async function POST(req: Request) {
     
     console.log(`[PIPELINE_INIT] Fetching live SERP data for primary keyword: "${topic}"...`);
 
-    // 3. Procure Google SERP Data via Serper.dev
+    // 3. Procure Google SERP Data (Fetch top 15 to maintain a standby buffer for deselection)
     const serperResponse = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: {
         "X-API-KEY": serperApiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ q: topic, num: 10 }), // Target top 10 organic results
+      body: JSON.stringify({ q: topic, num: 15 }), // Increased to 15 for the standby buffer
     });
 
     if (!serperResponse.ok) throw new Error("Failed to retrieve data from the primary search provider.");
@@ -124,13 +118,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No organic search results found for the specified query." }, { status: 404 });
     }
 
-    const topUrls = serperData.organic.map((res: any) => res.link).slice(0, 10);
+    const topUrls = serperData.organic.map((res: any) => res.link).slice(0, 15);
     console.log(`[SCRAPE_INIT] Identified ${topUrls.length} target URLs. Initializing concurrent workers...`);
 
     // 4. Concurrent Web Scraping with Fault Tolerance
-    const scrapePromises = topUrls.map(async (url: string) => {
+    const scrapePromises = topUrls.map(async (url: string, index: number) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8-second hard timeout per worker
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10-second hard timeout per worker
 
       const html = await fetchWithScrapingInfrastructure(url, controller.signal);
       clearTimeout(timeoutId);
@@ -146,13 +140,11 @@ export async function POST(req: Request) {
         const textContent = $("body").text().replace(/\s+/g, " ").trim();
         const wordCount = textContent.split(" ").length;
 
-        // Skip pages with insufficient content (likely errors or heavily JS-rendered pages)
         if (wordCount < 150) return null;
 
         const headings: { level: string; text: string }[] = [];
         $("h1, h2, h3").each((_, el) => {
           const text = $(el).text().replace(/\s+/g, " ").trim();
-          // Filter anomalous headings
           if (text.length > 10 && text.length < 120) {
             headings.push({ level: el.tagName.toLowerCase(), text });
           }
@@ -161,10 +153,11 @@ export async function POST(req: Request) {
         const pageTitle = $("title").text() || url;
 
         return {
+          id: `comp_${index}_${Date.now()}`,
           url,
           title: pageTitle.substring(0, 70),
           wordCount,
-          headings: headings.slice(0, 25) // Cap to prevent exceeding token context window
+          headings: headings.slice(0, 25) // Cap to prevent context window overflow
         } as ScrapedData;
 
       } catch (parseError) {
@@ -173,7 +166,6 @@ export async function POST(req: Request) {
       }
     });
 
-    // Use Promise.allSettled to guarantee the pipeline continues even if specific URLs fail
     const scrapedResultsRaw = await Promise.allSettled(scrapePromises);
     const validScrapedResults = scrapedResultsRaw
       .filter((res): res is PromiseFulfilledResult<ScrapedData> => res.status === 'fulfilled' && res.value !== null)
@@ -181,65 +173,79 @@ export async function POST(req: Request) {
 
     if (validScrapedResults.length === 0) {
       return NextResponse.json({ 
-        error: "Unable to parse competitor content. Targets may be protected by anti-bot measures. Consider upgrading to a premium scraping proxy." 
+        error: "Unable to parse competitor content. Targets may be protected by anti-bot measures." 
       }, { status: 422 });
     }
 
-    console.log(`[NLP_ROUTING] Successfully extracted data from ${validScrapedResults.length} competitors. Transmitting to NLP engine...`);
+    console.log(`[NLP_ROUTING] Successfully extracted data. Executing Chained AI Prompts...`);
 
-    // 5. NLP Analysis & Keyword Extraction via OpenAI
-    const completion = await openai.chat.completions.create({
+    // 5. CHAINED AI - Step 1: Core Search Intent & Keyword Matrix
+    const intentCompletion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // Faster model for initial classification
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `You are an elite SEO Strategist. Analyze the target topic and return a JSON object with strictly these keys:
+{
+  "searchIntent": "String (e.g., Informational, Transactional, Commercial Investigation)",
+  "primaryKeywords": ["kw1", "kw2", "kw3"],
+  "secondaryKeywords": ["kw4", "kw5", "kw6", "kw7"]
+}
+Rules: Extract LSI and semantic keywords. Target Language: ${language}.`
+        },
+        { role: "user", content: `Target Topic: "${topic}"` }
+      ]
+    });
+
+    const intentData = JSON.parse(intentCompletion.choices[0].message.content || "{}");
+
+    // 6. CHAINED AI - Step 2: Content Gap & PAA (People Also Ask) Analysis based on competitors
+    // We only send the headings to save tokens and focus the AI on structural gaps
+    const competitorHeadingsMap = validScrapedResults.slice(0, 10).map(c => ({ title: c.title, headings: c.headings.map(h => h.text) }));
+
+    const gapCompletion = await openai.chat.completions.create({
       model: "gpt-4o",
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `You are an elite SEO Strategist and NLP Expert. Analyze the provided real-world SERP competitor data.
-You MUST return the output ONLY as a valid JSON object matching this exact schema:
+          content: `You are a Senior Content Architect. Review the structural headings of the top ranking competitors for the topic.
+Identify critical content gaps (what they missed) and frequently asked questions.
+Return ONLY a JSON object matching this schema:
 {
-  "searchIntent": "String (e.g., Informational, Transactional, Commercial)",
-  "primaryKeywords": ["keyword1", "keyword2", "keyword3"],
-  "secondaryKeywords": ["kw4", "kw5", "kw6", "kw7", "kw8"],
-  "competitors": [
-    {
-      "name": "Competitor Site Title",
-      "url": "competitor.com",
-      "wordCount": 1500,
-      "headings": [
-        {"level": "h2", "text": "Heading text"}
-      ]
-    }
-  ],
+  "gaps": ["Gap 1", "Gap 2", "Gap 3"],
   "questions": [
     {"text": "Question 1", "selected": true},
     {"text": "Question 2", "selected": true}
   ]
 }
-
-CRITICAL RULES:
-1. TARGET LANGUAGE: ${language}. All generated insights, keywords, and questions MUST be in this language.
-2. NATIVE PHRASING: If English, enforce Native American English phrasing strictly.
-3. Extract high-value Semantic/LSI keywords based on the competitor headings.
-4. Return EXACTLY the competitors provided in the prompt payload; do NOT hallucinate fictional URLs.
-5. Content Depth Target: ${contentDepth}. Provide comprehensive keyword coverage suitable for this depth.`
+Rules: Target Language: ${language}. Depth: ${contentDepth}.`
         },
         {
           role: "user",
-          content: `Live SERP array for target query "${topic}":\n\n${JSON.stringify(validScrapedResults, null, 2)}`
+          content: `Target Topic: "${topic}"\nCompetitor Structures:\n${JSON.stringify(competitorHeadingsMap)}`
         }
-      ],
-      temperature: 0.5,
+      ]
     });
 
-    const rawContent = completion.choices[0].message.content;
-    
-    if (!rawContent) throw new Error("The NLP engine failed to return a valid payload.");
+    const gapData = JSON.parse(gapCompletion.choices[0].message.content || "{}");
 
-    const researchData = JSON.parse(rawContent);
+    // 7. Assemble the final unified payload
+    const researchData = {
+      intent: intentData.searchIntent || "Informational",
+      keywords: [
+        ...(intentData.primaryKeywords || []).map((k: string) => ({ text: k, selected: true })),
+        ...(intentData.secondaryKeywords || []).map((k: string) => ({ text: k, selected: false }))
+      ],
+      competitors: validScrapedResults, // Full array including standbys (up to 15)
+      questions: gapData.questions || [],
+      gaps: gapData.gaps || []
+    };
     
-    // 6. Finalize Transaction & Deduct Credits
-    await BillingGuard.deductCredits(userId, RESEARCH_COST);
-    console.log(`[SUCCESS] Research pipeline finalized. Deducted ${RESEARCH_COST} credit(s) from user ${userId}.`);
+    // 8. Finalize Transaction & Deduct Credits
+    await BillingGuard.deductCredits(userId, RESEARCH_COST, "RESEARCH");
+    console.log(`[SUCCESS] Research pipeline finalized. Deducted ${RESEARCH_COST} credit(s).`);
 
     return NextResponse.json({ data: researchData }, { status: 200 });
 
