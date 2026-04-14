@@ -9,18 +9,19 @@ import {
     LayoutDashboard,
     FileEdit,
     History,
-    Settings, // <-- EKLENDİ: Settings ikonu
+    Settings,
     ChevronLeft,
     ChevronRight,
     Sparkles
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// CRITICAL: Updated routes to match the new (app) Route Group architecture
 const navigation = [
     { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
-    { name: "AI Generator", href: "/dashboard/generator", icon: FileEdit },
-    { name: "History", href: "/dashboard/history", icon: History },
-    { name: "Settings", href: "/dashboard/settings", icon: Settings }, // <-- EKLENDİ: Settings menü elemanı
+    { name: "AI Generator", href: "/generator", icon: FileEdit },
+    { name: "History", href: "/history", icon: History },
+    { name: "WP Configuration", href: "/settings", icon: Settings },
 ];
 
 export default function Sidebar() {
@@ -42,7 +43,6 @@ export default function Sidebar() {
                 {navigation.map((item) => {
                     const fullHref = `/${locale}${item.href}`;
 
-                    // DÜZELTME: Overview (/dashboard) için KESİN eşleşme, diğerleri için alt yol eşleşmesi arıyoruz.
                     const isActive = item.href === '/dashboard'
                         ? pathname === fullHref
                         : pathname === fullHref || pathname.startsWith(fullHref + '/');

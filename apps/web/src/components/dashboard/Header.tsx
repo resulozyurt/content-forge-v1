@@ -156,7 +156,7 @@ export default function Header() {
                             <Menu.Item>
                                 {({ active }) => (
                                     <button
-                                        onClick={() => router.push(`/${locale}/dashboard/brand`)}
+                                        onClick={() => router.push(`/${locale}/brand`)}
                                         className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
                                     >
                                         <Building2 size={16} className="mr-3" /> Brand Identity
@@ -167,7 +167,7 @@ export default function Header() {
                             <Menu.Item>
                                 {({ active }) => (
                                     <button
-                                        onClick={() => router.push(`/${locale}/dashboard/settings`)}
+                                        onClick={() => router.push(`/${locale}/settings`)}
                                         className={cn("flex w-full items-center px-3 py-2 text-sm rounded-lg dark:text-gray-200", active ? "bg-gray-50 dark:bg-gray-800" : "")}
                                     >
                                         <Settings size={16} className="mr-3" /> Settings

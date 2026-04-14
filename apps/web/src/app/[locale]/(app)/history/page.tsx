@@ -99,7 +99,7 @@ export default function HistoryPage() {
                     </p>
                 </div>
                 <Link
-                    href={`/${locale}/dashboard/generator`}
+                    href={`/${locale}/generator`}
                     className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-bold rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                 >
                     + New Document
@@ -204,7 +204,7 @@ export default function HistoryPage() {
                                             <div className="flex items-center justify-end gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                                 {/* CRITICAL: Properly formatted routing sequence for document retrieval */}
                                                 <button
-                                                    onClick={() => router.push(`/${locale}/dashboard/editor/${doc.id}`)}
+                                                    onClick={() => router.push(`/${locale}/editor/${doc.id}`)}
                                                     className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-800 rounded-lg transition-colors" title="Open in Editor">
                                                     <Edit3 className="w-4 h-4" />
                                                 </button>

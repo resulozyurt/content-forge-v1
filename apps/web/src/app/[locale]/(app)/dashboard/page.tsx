@@ -72,7 +72,7 @@ export default async function DashboardPage({
                     </p>
                 </div>
                 <Link
-                    href={`/${locale}/dashboard/generator`}
+                    href={`/${locale}/generator`}
                     className="inline-flex items-center justify-center px-5 py-2.5 border border-transparent text-sm font-bold rounded-xl shadow-md text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all hover:scale-105"
                 >
                     + Create New Content
@@ -123,7 +123,7 @@ export default async function DashboardPage({
                     </div>
                     <div className="bg-gray-50 dark:bg-gray-800/50 px-5 py-3 border-t border-gray-200 dark:border-gray-800 transition-colors">
                         <div className="text-sm">
-                            <Link href={`/${locale}/dashboard/history`} className="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 transition-colors">
+                            <Link href={`/${locale}/history`} className="font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 transition-colors">
                                 View all documents
                             </Link>
                         </div>
@@ -161,7 +161,7 @@ export default async function DashboardPage({
                         <Clock className="w-5 h-5 text-blue-600" />
                         Recent Documents
                     </h2>
-                    <Link href={`/${locale}/dashboard/history`} className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center">
+                    <Link href={`/${locale}/history`} className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center">
                         View All <ArrowRight className="w-4 h-4 ml-1" />
                     </Link>
                 </div>
@@ -208,7 +208,7 @@ export default async function DashboardPage({
                                         </td>
                                         <td className="p-4 text-right">
                                             <Link
-                                                href={`/${locale}/dashboard/editor/${doc.id}`}
+                                                href={`/${locale}/editor/${doc.id}`}
                                                 className="inline-flex items-center text-blue-600 dark:text-blue-400 font-bold text-sm opacity-0 group-hover:opacity-100 transition-opacity hover:underline"
                                             >
                                                 Open Editor <Edit3 className="w-3.5 h-3.5 ml-1.5" />
