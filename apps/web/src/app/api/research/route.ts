@@ -62,6 +62,20 @@ const fetchWithScrapingInfrastructure = async (url: string, signal: AbortSignal)
   }
 };
 
+const userId = (session.user as any).id;
+// Limit: 20 research operations per hour per user
+const limiter = await rateLimit(`research_${userId}`, 20, 60 * 60 * 1000); 
+
+if (!limiter.success) {
+    return NextResponse.json(
+        { error: "Research quota exceeded. Please wait before starting new research." }, 
+        { 
+            status: 429, 
+            headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+        }
+    );
+}
+
 export async function POST(req: Request) {
   try {
     // 1. Authentication & Session Validation

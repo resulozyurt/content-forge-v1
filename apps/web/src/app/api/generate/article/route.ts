@@ -13,6 +13,24 @@ const anthropic = new Anthropic();
 // Extend the maximum execution duration for serverless environments (Vercel)
 export const maxDuration = 300;
 
+// Inside POST function:
+const userId = (session.user as any).id;
+// Limit: 10 full article generations per hour per user (highly expensive)
+const limiter = await rateLimit(`gen_article_${userId}`, 10, 60 * 60 * 1000);
+
+if (!limiter.success) {
+    return new Response(
+        JSON.stringify({ message: "Generation quota reached. Please check back in an hour." }), 
+        { 
+            status: 429, 
+            headers: { 
+                'Content-Type': 'application/json',
+                ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset)
+            } 
+        }
+    );
+}
+
 export async function POST(req: NextRequest) {
     try {
         // 1. Authentication & Session Validation
