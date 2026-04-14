@@ -3,69 +3,111 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
+import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
+import { headers } from "next/headers";
 import OpenAI from "openai";
 
+// Initialize the OpenAI SDK
 const openai = new OpenAI();
 
-// Extended timeout for full document proofreading
-export const maxDuration = 120;
+// Extend serverless execution timeout to accommodate comprehensive document analysis
+export const maxDuration = 120; 
 
 export async function POST(req: Request) {
     try {
         // 1. Authentication & Session Validation
         const session = await getServerSession(authOptions);
         if (!session?.user?.id) {
-            return NextResponse.json({ error: "Unauthorized access. Please log in." }, { status: 401 });
+            return NextResponse.json(
+                { error: "Unauthorized access. Authentication is required." }, 
+                { status: 401 }
+            );
         }
 
         const userId = (session.user as any).id;
-        const PROOFREAD_COST = 2; // Full document analysis is more resource-intensive
+        const PROOFREAD_COST = 2; // Economical cost relative to full generation
 
-        // 2. Billing Guard validation
+        // 2. Rate Limiting: Prevent abuse of the NLP correction pipeline (15 requests per hour)
+        const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
+        const limiter = await rateLimit(`proofread_${userId}_${ip}`, 15, 60 * 60 * 1000);
+
+        if (!limiter.success) {
+            return NextResponse.json(
+                { error: "Proofreading quota exceeded. Please try again later." }, 
+                { 
+                    status: 429, 
+                    headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+                }
+            );
+        }
+
+        // 3. Billing Guard Assessment
         await BillingGuard.checkCredits(userId, PROOFREAD_COST);
 
+        // 4. Payload Extraction
         const { htmlContent, language } = await req.json();
 
-        if (!htmlContent) {
-            return NextResponse.json({ error: "Missing required document payload." }, { status: 400 });
+        if (!htmlContent || typeof htmlContent !== 'string') {
+            return NextResponse.json(
+                { error: "Invalid payload: HTML content is required for proofreading." }, 
+                { status: 400 }
+            );
         }
 
         const targetLanguage = language || "English (US)";
 
-        console.log(`[PROOFREAD_PIPELINE] Initiating full document grammar analysis for user ${userId}. Language: ${targetLanguage}`);
+        console.log(`[PROOFREAD_PIPELINE] Initializing linguistic analysis for language context: ${targetLanguage}`);
 
-        // 3. Execute the AI proofreading analysis
+        // 5. Advanced System Prompt Engineering for HTML-Preserving Grammatical Correction
+        const systemPrompt = `You are an elite, meticulous copy editor and linguistic expert.
+Your task is to proofread the provided HTML content and return the corrected HTML.
+
+CRITICAL DIRECTIVES:
+1. TARGET LANGUAGE: Ensure the text conforms flawlessly to ${targetLanguage}. If the target is English, enforce Native American English grammar, syntax, vocabulary, and flow exclusively.
+2. PRESERVE HTML INTEGRITY: You MUST NOT alter, remove, or break any HTML tags (e.g., <h2>, <p>, <strong>, <a>, <img>). Only modify the text node content within these tags.
+3. ENHANCE READABILITY: Correct spelling, punctuation, and grammatical errors. Improve awkward phrasing for a professional, authoritative tone without changing the core meaning or the targeted SEO keywords.
+4. JSON OUTPUT FORMAT: Return your response ONLY as a valid JSON object matching this schema:
+{
+  "result": "The fully corrected HTML string."
+}
+5. NO MARKDOWN: Do not wrap the JSON output in markdown backticks (e.g., \`\`\`json). Return the raw JSON string directly.`;
+
+        // 6. NLP Processing via OpenAI
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o", 
+            model: "gpt-4o", // Utilizing the most capable model for nuanced linguistic tasks
+            response_format: { type: "json_object" },
             messages: [
-                {
-                    role: "system",
-                    content: `You are an elite linguistic editor and proofreader. Your task is to analyze the provided HTML document and correct any grammatical errors, typos, punctuation mistakes, and awkward phrasing.
-                    
-                    CRITICAL RULES:
-                    1. Target Language: EXACTLY ${targetLanguage}. If English, utilize flawless Native American English phrasing and spelling exclusively.
-                    2. Maintain the exact structural integrity of the HTML (<p>, <h2>, <h3>, <img>, etc.). Do NOT strip or alter HTML tags, attributes, or structural classes.
-                    3. Output ONLY the corrected raw HTML without markdown wrappers (e.g., no \`\`\`html). Do not add any explanatory text.`
-                },
-                {
-                    role: "user",
-                    content: `Please proofread and refine the following HTML content:\n\n${htmlContent}`
-                }
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Please proofread and optimize the following HTML content:\n\n${htmlContent}` }
             ],
-            temperature: 0.2, // Low temperature for high precision and structural fidelity
+            temperature: 0.3, // Low temperature for high precision and factual consistency
         });
 
-        // 4. Sanitize the output from residual markdown artifacts
-        const sanitizedResult = completion.choices[0].message.content?.trim().replace(/```html|```/g, '') || htmlContent;
+        const rawContent = completion.choices[0].message.content;
+        
+        if (!rawContent) {
+            throw new Error("The NLP engine failed to return a valid correction payload.");
+        }
 
-        // 5. Finalize the ledger transaction
+        // Robust parsing to handle potential model anomalies
+        const cleanedRaw = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsedData = JSON.parse(cleanedRaw);
+
+        if (!parsedData.result) {
+            throw new Error("The returned payload is missing the expected 'result' field.");
+        }
+
+        // 7. Finalize Transaction & Deduct Credits
         await BillingGuard.deductCredits(userId, PROOFREAD_COST);
-        console.log(`[SUCCESS] Document proofreading completed. Deducted ${PROOFREAD_COST} credits.`);
+        console.log(`[SUCCESS] Document proofreading completed. Deducted ${PROOFREAD_COST} credit(s) from user ${userId}.`);
 
-        return NextResponse.json({ result: sanitizedResult }, { status: 200 });
+        return NextResponse.json({ result: parsedData.result }, { status: 200 });
 
     } catch (error: any) {
-        console.error("[PROOFREAD_PIPELINE_ERROR]:", error);
-        return NextResponse.json({ error: error.message || "The proofreading pipeline encountered a critical fault." }, { status: 500 });
+        console.error("[PROOFREAD_PIPELINE_CRITICAL_FAULT]:", error);
+        return NextResponse.json(
+            { error: error.message || "An unexpected error occurred during the proofreading sequence." }, 
+            { status: 500 }
+        );
     }
 }
