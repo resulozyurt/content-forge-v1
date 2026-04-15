@@ -66,7 +66,7 @@ export default async function EditorPage({
             <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden">
                 <ProseEditor
                     outlineData={outlineData}
-                    initialHtml={document.outputContent}
+                    initialHtml={document.outputContent || undefined}
                     documentId={document.id}
                 />
             </div>
