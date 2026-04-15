@@ -190,7 +190,7 @@ export async function POST(req: Request) {
 
     // 6. CLAUDE 3.5 SONNET - Tool Use Execution for strict schema adherence
     const anthropicResponse = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-20240620",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       temperature: 0.2, // Low temperature for highly analytical and structured output
       system: `You are an elite SEO Strategist and Data Scientist. Your task is to analyze raw competitor content and extract semantic insights mimicking a mathematical TF-IDF NLP model. Target output language: ${language}.`,
