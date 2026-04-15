@@ -1,11 +1,18 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": ["**/.env.*local"],
   "ui": "tui",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"]
+      "outputs": [".next/**", "!.next/cache/**"],
+      "env": [
+        "OPENAI_API_KEY",
+        "ENCRYPTION_KEY",
+        "DATABASE_URL",
+        "NEXTAUTH_SECRET"
+      ]
     },
     "lint": {
       "dependsOn": ["^lint"]
