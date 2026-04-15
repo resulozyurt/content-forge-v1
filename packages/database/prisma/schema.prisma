@@ -85,6 +85,7 @@ model ContentJob {
   
   inputPayload  Json     // User input data (keyword, language, etc.)
   outputContent String?  // Final generated HTML/Markdown
+  seoMetadata   Json?
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

@@ -191,7 +191,7 @@ STRICT RULES:
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; // HTML Accumulator for database persistence
 
-                    // Primary Generation Loop
+                    // 7.1 Primary Generation Loop
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
@@ -278,8 +278,8 @@ STRICT RULES:
                             content: generatedText,
                         });
 
-                        // Visual Asset Generation
-                        if (heading.level === 'h2' && h2Counter % 2 === 0) {
+                        // 7.2 Visual Asset Generation (Strictly every 3rd H2)
+                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
@@ -356,7 +356,7 @@ CRITICAL RULES:
                                                 <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
                                             </figure>
                                         `;
-                                        fullGeneratedHtml += `${imgHtml}\n`; // Accumulate Image HTML
+                                        fullGeneratedHtml += `${imgHtml}\n`; 
                                         sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                     } else {
                                         imgHtml = `
@@ -365,7 +365,7 @@ CRITICAL RULES:
                                                 <p class="text-gray-800 font-mono text-sm">${promptData.prompt}</p>
                                             </div>
                                         `;
-                                        fullGeneratedHtml += `${imgHtml}\n`; // Accumulate Fallback HTML
+                                        fullGeneratedHtml += `${imgHtml}\n`; 
                                         sendEvent({ id: `img-prompt-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                     }
                                 }
@@ -375,12 +375,61 @@ CRITICAL RULES:
                         }
                     }
 
+                    // 7.3 POST-PROCESSING: Rank Math SEO Metadata Generation
+                    let finalSeoMetadata = null;
+                    try {
+                        const seoSystemPrompt = `You are a Senior Technical SEO Architect.
+Task: Generate Rank Math compatible metadata for the generated article.
+RULES:
+1. Language MUST be exactly: ${config.language}.
+2. Provide a 'focusKeyword' that represents the main topic perfectly.
+3. Provide a 'metaTitle' (max 60 characters, highly clickable).
+4. Provide a 'metaDescription' (max 160 characters, strong CTA).`;
+
+                        // We slice the content to save tokens, the first 5000 chars are usually enough for context
+                        const contentSample = fullGeneratedHtml.substring(0, 5000); 
+
+                        const seoResponse = await anthropic.messages.create({
+                            model: "claude-sonnet-4-6",
+                            max_tokens: 500,
+                            system: seoSystemPrompt,
+                            messages: [{ role: "user", content: `Analyze this content and generate SEO JSON:\n\n${contentSample}` }],
+                            tools: [
+                                {
+                                    name: "set_rank_math_metadata",
+                                    description: "Outputs strict Rank Math metadata.",
+                                    input_schema: {
+                                        type: "object",
+                                        properties: {
+                                            focusKeyword: { type: "string" },
+                                            metaTitle: { type: "string" },
+                                            metaDescription: { type: "string" }
+                                        },
+                                        required: ["focusKeyword", "metaTitle", "metaDescription"]
+                                    }
+                                }
+                            ],
+                            tool_choice: { type: "tool", name: "set_rank_math_metadata" },
+                            temperature: 0.3,
+                        });
+
+                        const seoBlock = seoResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
+                        if (seoBlock) {
+                            finalSeoMetadata = typeof seoBlock.input === 'string' ? JSON.parse(seoBlock.input) : seoBlock.input;
+                            // Dispatch SEO data to frontend
+                            sendEvent({ id: `seo-${Date.now()}`, type: 'seo_metadata', content: finalSeoMetadata });
+                        }
+                    } catch (seoError) {
+                        console.error("[SEO_METADATA_GENERATION_FAULT]:", seoError);
+                    }
+
                     // 8. Commit Job Persistence (Success)
                     await prisma.contentJob.update({
                         where: { id: currentJobId! },
                         data: {
                             status: "COMPLETED",
-                            outputContent: fullGeneratedHtml
+                            outputContent: fullGeneratedHtml,
+                            seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined // NEW: Save to DB
                         }
                     });
 
@@ -416,7 +465,7 @@ CRITICAL RULES:
         if (areCreditsDeducted && currentJobId) {
             console.log("[BILLING_ROLLBACK]: Refunding user due to critical fault.");
             try {
-                // Direct DB manipulation used as fallback if BillingGuard lacks a native refund method
+                // Direct DB manipulation used as fallback
                 await prisma.transaction.create({
                     data: {
                         userId: currentUserId,
