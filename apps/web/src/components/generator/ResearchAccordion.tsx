@@ -25,7 +25,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
     const [completedSteps, setCompletedSteps] = useState<string[]>([]);
     const [data, setData] = useState<ResearchResultData | null>(null);
 
-    // Fetch real data from the API
+    // Execute the backend research pipeline and ingest the standardized payload
     useEffect(() => {
         let isMounted = true;
 
@@ -40,42 +40,39 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                     })
                 });
 
-                if (!response.ok) throw new Error("API failed");
+                if (!response.ok) throw new Error("API pipeline failed to return valid data.");
                 const jsonResponse = await response.json();
                 const apiData = jsonResponse.data;
 
                 if (isMounted) {
-                    // Map the strict JSON from OpenAI to the UI's expected format
+                    // Map the standardized backend payload directly to the UI state.
+                    // The backend has already formatted keywords and competitors perfectly.
                     const formattedData: any = {
-                        intent: apiData.searchIntent || "Informational",
-                        keywords: [
-                            ...(apiData.primaryKeywords || []).map((k: string) => ({ text: k, selected: true })),
-                            ...(apiData.secondaryKeywords || []).map((k: string) => ({ text: k, selected: false }))
-                        ],
-                        competitors: (apiData.competitors || []).map((c: any, i: number) => ({
-                            id: String(i),
-                            url: c.name.toLowerCase().replace(/\s+/g, '') + ".com",
-                            title: c.name,
-                            wordCount: Math.floor(Math.random() * 1000) + 1200,
-                            selected: true,
-                            headings: c.headings // Passed down for outline builder
+                        intent: apiData.intent || "Informational",
+                        keywords: apiData.keywords || [],
+                        competitors: (apiData.competitors || []).map((c: any) => ({
+                            id: c.id,
+                            url: c.url,
+                            title: c.title,
+                            wordCount: c.wordCount,
+                            selected: true, // Default to true so users can manually exclude them
+                            headings: c.headings
                         })),
-                        questions: [
-                            { text: `What are the benefits of ${config.query || 'this topic'}?`, selected: true },
-                            { text: `How to implement ${config.query || 'this'} effectively?`, selected: true }
-                        ]
+                        questions: apiData.questions || [],
+                        gaps: apiData.gaps || []
                     };
                     setData(formattedData);
                 }
             } catch (err) {
-                console.error("Research Error:", err);
-                // Fallback mock data in case of API failure to prevent UI lock
+                console.error("[RESEARCH_UI_FAULT]: Data ingestion failed.", err);
+                // Fallback state to prevent hard crashes
                 if (isMounted) {
                     setData({
                         intent: "Informational",
                         keywords: [{ text: "Error fetching keywords", selected: true }],
                         competitors: [],
-                        questions: []
+                        questions: [],
+                        gaps: []
                     } as any);
                 }
             }
@@ -85,11 +82,11 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
         return () => { isMounted = false; };
     }, [config]);
 
-    // UI Simulation Effect synced with API
+    // Orchestrate the visual progression timer synced with API data availability
     useEffect(() => {
         if (activeStepIndex >= researchSteps.length) return;
 
-        // Pause the visual timer at the final step if API data hasn't returned yet
+        // Halt the visual progression at the final step if the API payload is still pending
         if (activeStepIndex === researchSteps.length - 1 && !data) return;
 
         const timer = setTimeout(() => {
@@ -124,7 +121,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
     return (
         <div className="w-full max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-            {/* Header & Progress */}
+            {/* Header & Progression Indicator */}
             <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                     <div>
@@ -151,13 +148,12 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                 </div>
             </div>
 
-            {/* Flattened Dashboard Layout (Always Open) */}
+            {/* Interactive Data Dashboard */}
             <div className="space-y-6">
                 {researchSteps.map((step, index) => {
                     const isCompleted = completedSteps.includes(step.id);
                     const isActive = index === activeStepIndex;
 
-                    // Hide unreached steps to keep the UI clean
                     if (!isCompleted && !isActive) return null;
 
                     return (
@@ -168,7 +164,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                 isActive ? "border-blue-400 shadow-md ring-1 ring-blue-400" : "border-gray-200 dark:border-gray-800 shadow-sm"
                             )}
                         >
-                            {/* Step Header (No longer interactive) */}
+                            {/* Step Header */}
                             <div className="w-full px-6 py-4 flex items-center gap-4 bg-gray-50/50 dark:bg-gray-800/30 border-b border-gray-100 dark:border-gray-800">
                                 {isCompleted ? (
                                     <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
@@ -183,11 +179,11 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                 </span>
                             </div>
 
-                            {/* Step Content Payload (Always visible if completed) */}
+                            {/* Payload Rendering */}
                             {isCompleted && data && (
                                 <div className="p-6">
 
-                                    {/* Intent Content */}
+                                    {/* Intent Output */}
                                     {step.id === 'intent' && (
                                         <div className="space-y-2">
                                             <p className="text-sm text-gray-500">Detected Search Intent:</p>
@@ -195,10 +191,10 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {/* Keyword Content */}
+                                    {/* Keyword Output */}
                                     {step.id === 'keywords' && (
                                         <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Select the keywords you want the AI to include:</p>
+                                            <p className="text-sm text-gray-500 mb-3">Select the semantic keywords you want the AI to inject:</p>
                                             <div className="flex flex-wrap gap-2">
                                                 {data.keywords?.map((kw: any, i: number) => (
                                                     <button
@@ -219,10 +215,10 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {/* SERP Content */}
+                                    {/* SERP Competitor Output */}
                                     {step.id === 'serp' && (
                                         <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Uncheck competitors you want to exclude from the AI analysis:</p>
+                                            <p className="text-sm text-gray-500 mb-3">Uncheck structural targets you want to exclude from the baseline analysis:</p>
                                             <div className="space-y-2">
                                                 {data.competitors?.map((comp: any) => (
                                                     <div
@@ -253,9 +249,35 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {/* Fallback for other steps */}
-                                    {!['intent', 'keywords', 'serp'].includes(step.id) && (
-                                        <p className="text-sm text-gray-500 italic">Analysis completed and saved for outline generation.</p>
+                                    {/* Questions Output */}
+                                    {step.id === 'questions' && (
+                                        <div className="space-y-3">
+                                            <p className="text-sm text-gray-500 mb-3">Identified People Also Ask (PAA) constraints:</p>
+                                            <ul className="list-disc pl-5 space-y-1 text-gray-700 dark:text-gray-300 font-medium">
+                                                {data.questions?.map((q: any, i: number) => (
+                                                    <li key={i}>{q.text}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    {/* Content Gaps Output */}
+                                    {step.id === 'gaps' && (
+                                        <div className="space-y-3">
+                                            <p className="text-sm text-gray-500 mb-3">Identified semantic voids in current SERP topology:</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {data.gaps?.map((gap: string, i: number) => (
+                                                    <span key={i} className="px-3 py-1.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 text-sm font-medium border border-purple-200 dark:border-purple-800">
+                                                        {gap}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Final Step Fallback */}
+                                    {step.id === 'outline' && (
+                                        <p className="text-sm text-gray-500 italic">Data successfully consolidated for structural outlining.</p>
                                     )}
 
                                 </div>
@@ -265,14 +287,14 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                 })}
             </div>
 
-            {/* Action Button */}
+            {/* Terminal Action Button */}
             {isAllComplete && data && (
                 <div className="flex justify-end pt-4 animate-in fade-in zoom-in duration-500">
                     <button
                         onClick={() => onCompleteResearch(data)}
                         className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all bg-green-600 hover:bg-green-700 rounded-xl shadow-md hover:scale-[1.02]"
                     >
-                        Review Outline
+                        Review Outline Matrix
                         <ChevronDown className="w-5 h-5 ml-2 -rotate-90" />
                     </button>
                 </div>
