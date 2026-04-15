@@ -1,15 +1,14 @@
 // apps/web/src/proxy.ts
 import createMiddleware from 'next-intl/middleware';
 import { withAuth } from "next-auth/middleware";
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-const locales = ['en', 'tr']; 
-// Designate root and authentication paths as publicly accessible perimeters
-const publicPages = ['/', '/auth/login', '/auth/register'];
+const locales = ['en', 'tr'];
+const defaultLocale = 'en';
 
 const intlMiddleware = createMiddleware({
   locales,
-  defaultLocale: 'en'
+  defaultLocale
 });
 
 const authMiddleware = withAuth(
@@ -21,28 +20,49 @@ const authMiddleware = withAuth(
       authorized: ({ token }) => !!token,
     },
     pages: {
-      signIn: '/en/auth/login',
+      signIn: '/auth/login',
     },
   }
 );
 
-// CRITICAL: Next.js 16 deprecates 'middleware' in favor of the 'proxy' convention
 export default function proxy(req: NextRequest) {
-  const publicPathnameRegex = RegExp(
-    `^(/(${locales.join('|')}))?(${publicPages.join('|')})?/?$`,
-    'i'
-  );
-  const isPublicPage = publicPathnameRegex.test(req.nextUrl.pathname);
+  const pathname = req.nextUrl.pathname;
 
-  if (isPublicPage) {
-    return intlMiddleware(req);
-  } else {
-    return (authMiddleware as any)(req);
+  // 1. Identify the requested locale to maintain routing context
+  const currentLocale = locales.find(
+    (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
+  ) || defaultLocale;
+
+  // 2. Normalize the path by stripping the locale prefix
+  const pathWithoutLocale = pathname.replace(new RegExp(`^/${currentLocale}`), '') || '/';
+
+  // 3. Homepage resolution: Redirect root requests directly to the dashboard
+  if (pathWithoutLocale === '/') {
+    return NextResponse.redirect(new URL(`/${currentLocale}/dashboard`, req.url));
   }
+
+  // 4. Define public authentication perimeters
+  const isAuthPage = pathWithoutLocale.startsWith('/auth/login') || pathWithoutLocale.startsWith('/auth/register');
+
+  // 5. Reliable session validation via secure and non-secure cookie inspection
+  const hasToken = 
+    req.cookies.has('next-auth.session-token') || 
+    req.cookies.has('__Secure-next-auth.session-token');
+
+  // 6. Infinite loop prevention: Route authenticated users away from login barriers
+  if (isAuthPage && hasToken) {
+    return NextResponse.redirect(new URL(`/${currentLocale}/dashboard`, req.url));
+  }
+
+  // 7. Execute middleware delegation
+  if (isAuthPage) {
+    return intlMiddleware(req);
+  }
+
+  return (authMiddleware as any)(req);
 }
 
 export const config = {
-  // CRITICAL: Bypass the internationalization interceptor for API routes and static assets.
-  // Failing to enforce this exclusion will corrupt NextAuth endpoints, resulting in 404 HTML errors.
+  // Bypass the internationalization interceptor for API routes and static assets
   matcher: ['/((?!api|_next|.*\\..*).*)']
 };
