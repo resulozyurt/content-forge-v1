@@ -10,14 +10,16 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@contentforge/database"; 
 
-// Initialize AI SDK clients
+// Initialize AI SDK clients. Anthropic is prioritized as the primary cognitive engine.
 const openai = new OpenAI();
-const anthropic = new Anthropic();
+const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY || "",
+});
 
-// Extend the maximum execution duration for serverless environments (Vercel)
+// Extend the maximum execution duration for serverless environments (Vercel/Railway)
 export const maxDuration = 300;
 
-// Define a rigorous input validation schema to prevent malformed requests and injection
+// Define a rigorous input validation schema to prevent malformed requests and injection attacks
 const generationPayloadSchema = z.object({
     outlineData: z.object({
         headings: z.array(z.object({
@@ -32,10 +34,10 @@ const generationPayloadSchema = z.object({
         language: z.string().optional().default("English (US)"),
         tone: z.string().optional().default("Highly Professional, Data-Driven, Authoritative"),
         depth: z.string().optional().default("Comprehensive"),
-        engine: z.string().optional().default("gpt-4o"),
+        engine: z.string().optional().default("claude-3-5-sonnet-latest"),
         wpSitemap: z.string().optional().default(""),
-        targetLength: z.string().optional().default("1000"), // Word count objective
-        enableBrandVoice: z.boolean().optional().default(false) // Brand injection flag
+        targetLength: z.string().optional().default("1000"), 
+        enableBrandVoice: z.boolean().optional().default(false) 
     })
 });
 
@@ -100,9 +102,9 @@ export async function POST(req: NextRequest) {
 
         // Calculate dynamic word count per section to prevent LLM truncation
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
-        const wordsPerSection = Math.max(100, Math.floor(targetTotalWords / totalHeadings));
+        const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
 
-        // 6. Fetch Brand Identity (If Enabled)
+        // 6. Fetch Brand Identity Context
         let brandContext = "";
         let brandNameContext = "";
         if (config.enableBrandVoice) {
@@ -162,15 +164,9 @@ CRITICAL: Do not make it sound like a cheap advertisement. Weave it naturally in
                         ? `INTERNAL LINK RULE: You MUST organically insert ONE internal link using a relevant URL from this list: ${internalLinks.join(', ')}. Format: <a href="[URL]" class="text-blue-600 hover:underline">[Anchor Text]</a>.`
                         : `INTERNAL LINK RULE: Skip internal linking altogether as no valid sitemap URLs were detected.`;
 
-                    // Core SEO & NLP System Prompt
+                    // Core SEO & NLP System Prompt tailored for Claude's analytical strengths
                     const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
 Task: Write a high-density, expert-level section for the heading provided.
-
-CRITICAL OUTPUT FORMAT: You MUST return your response ONLY as a valid JSON object matching this exact schema:
-{
-  "rewrittenHeading": "A highly engaging, unique, and SEO-optimized variation of the provided heading. Do not copy the original exactly.",
-  "htmlContent": "The raw HTML content (<p>, <ul>, <strong>) for this section. No markdown backticks."
-}
 
 STRICT RULES:
 1. NO FLUFF: Avoid generic introductions. Deliver pure, factual, and analytical value immediately.
@@ -178,9 +174,8 @@ STRICT RULES:
 3. TONE: ${tone}.
 4. DEPTH: ${depth}.
 5. LENGTH TARGET: Write approximately ${wordsPerSection} words for this section. Ensure the narrative is complete and NEVER truncated.
-6. FORMAT: Return ONLY valid JSON.
-7. ${externalLinksContext}
-8. ${internalLinksContext}${brandContext}`;
+6. ${externalLinksContext}
+7. ${internalLinksContext}${brandContext}`;
 
                     let h2Counter = 0;
 
@@ -197,44 +192,64 @@ STRICT RULES:
                         
                         let finalHeadingText = heading.text;
                         let generatedText = "";
-                        let rawContent = "";
 
-                        // A. Dynamic Engine Routing (Text Generation)
+                        // A. Dynamic Engine Routing (Prioritizing Claude Tool Use)
                         try {
                             if (engine.toLowerCase().includes("claude")) {
-                                const msg = await anthropic.messages.create({
-                                    model: "claude-3-5-sonnet-20240620",
-                                    max_tokens: 3500,
+                                const anthropicResponse = await anthropic.messages.create({
+                                    model: "claude-sonnet-4-6",
+                                    max_tokens: 4096,
                                     system: systemPrompt,
                                     messages: [{ role: "user", content: userMessage }],
+                                    tools: [
+                                        {
+                                            name: "generate_section",
+                                            description: "Generates the semantic HTML content and refined heading.",
+                                            input_schema: {
+                                                type: "object",
+                                                properties: {
+                                                    rewrittenHeading: { type: "string", description: "A highly engaging, unique, and SEO-optimized variation of the heading." },
+                                                    htmlContent: { type: "string", description: "The raw HTML content (<p>, <ul>, <strong>) for this section. No markdown backticks." }
+                                                },
+                                                required: ["rewrittenHeading", "htmlContent"]
+                                            }
+                                        }
+                                    ],
+                                    tool_choice: { type: "tool", name: "generate_section" },
                                     temperature: 0.6,
                                 });
                                 
-                                if (msg.content[0].type === 'text') {
-                                    rawContent = msg.content[0].text;
+                                const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
+                                if (toolUseBlock) {
+                                    let parsedData: any = {};
+                                    if (typeof toolUseBlock.input === 'string') {
+                                        parsedData = JSON.parse(toolUseBlock.input);
+                                    } else {
+                                        parsedData = toolUseBlock.input;
+                                    }
+                                    finalHeadingText = parsedData.rewrittenHeading || heading.text;
+                                    generatedText = parsedData.htmlContent || "";
                                 }
                             } else {
+                                // Fallback to OpenAI if explicitly requested by the user
                                 const textCompletion = await openai.chat.completions.create({
                                     model: "gpt-4o",
                                     response_format: { type: "json_object" },
                                     messages: [
-                                        { role: "system", content: systemPrompt },
+                                        { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object matching: { "rewrittenHeading": "...", "htmlContent": "..." }` },
                                         { role: "user", content: userMessage }
                                     ],
                                     temperature: 0.6,
                                 });
-                                rawContent = textCompletion.choices[0].message.content || "{}";
+                                const rawContent = textCompletion.choices[0].message.content || "{}";
+                                const parsedData = JSON.parse(rawContent);
+                                finalHeadingText = parsedData.rewrittenHeading || heading.text;
+                                generatedText = parsedData.htmlContent || "";
                             }
 
-                            const cleanedRaw = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
-                            const parsedData = JSON.parse(cleanedRaw);
-                            
-                            finalHeadingText = parsedData.rewrittenHeading || heading.text;
-                            generatedText = parsedData.htmlContent || "";
-
                         } catch (parseError) {
-                            console.error("[PARSE_FAULT] Failed to extract valid JSON payload from AI response.", parseError);
-                            generatedText = rawContent || "<p>The content pipeline encountered a formatting fault during execution.</p>";
+                            console.error("[PARSE_FAULT] Failed to execute generation pipeline.", parseError);
+                            generatedText = "<p>The content pipeline encountered a formatting fault during execution.</p>";
                         }
 
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
@@ -252,58 +267,61 @@ STRICT RULES:
                             content: generatedText,
                         });
 
-                        // C. Visual Asset Generation (Gemini 3.1 Flash / Nano Banana Logic)
+                        // C. Visual Asset Generation (Migrated to Claude Tool-Use + Gemini Flash)
                         if (heading.level === 'h2' && h2Counter % 2 === 0) {
                             try {
-                                // Adım 1: SEO ve Image Prompt Üretimi
-                                const promptReq = await openai.chat.completions.create({
-                                    model: "gpt-4o-mini", // Hızlı ve ekonomik prompt motoru
-                                    response_format: { type: "json_object" },
+                                // Step 1: Generate Visual Metadata via Claude
+                                const promptReq = await anthropic.messages.create({
+                                    model: "claude-sonnet-4-6", 
+                                    max_tokens: 1000,
+                                    system: `You are an expert art director and SEO specialist. 
+TASK: Create a highly detailed image generation prompt and SEO metadata.
+
+CRITICAL RULES:
+1. The 'prompt' MUST be in English. The SEO fields must be in ${language}.
+2. Style: ULTRA-REALISTIC, DSLR photography, 35mm lens, natural lighting. NO text in images.
+${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameContext}.` : ''}`,
                                     messages: [
+                                        { role: "user", content: `Create visual metadata for an article section titled: "${finalHeadingText}".` }
+                                    ],
+                                    tools: [
                                         {
-                                            role: "system",
-                                            content: `You are an expert art director and SEO specialist. 
-                                            TASK: Create a highly detailed image generation prompt and SEO metadata.
-                                            
-                                            CRITICAL RULES:
-                                            1. The 'prompt' MUST be in English. The SEO fields must be in ${language}.
-                                            2. Style: ULTRA-REALISTIC, DSLR photography, 35mm lens, natural lighting. NO text in images.
-                                            ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameContext}.` : ''}
-                                            
-                                            Output EXACTLY in this JSON format:
-                                            {
-                                                "prompt": "Detailed description for the image generator",
-                                                "alt": "SEO Alt text describing the image",
-                                                "title": "SEO Title",
-                                                "caption": "Helpful visible caption for the reader"
-                                            }`
-                                        },
-                                        {
-                                            role: "user",
-                                            content: `Create visual metadata for an article section titled: "${finalHeadingText}".`
+                                            name: "generate_image_metadata",
+                                            description: "Provides structured metadata for image generation.",
+                                            input_schema: {
+                                                type: "object",
+                                                properties: {
+                                                    prompt: { type: "string" },
+                                                    alt: { type: "string" },
+                                                    title: { type: "string" },
+                                                    caption: { type: "string" }
+                                                },
+                                                required: ["prompt", "alt", "title", "caption"]
+                                            }
                                         }
                                     ],
+                                    tool_choice: { type: "tool", name: "generate_image_metadata" },
                                     temperature: 0.7,
                                 });
 
-                                const promptDataRaw = promptReq.choices[0].message.content?.trim() || "{}";
-                                const promptData = JSON.parse(promptDataRaw);
+                                const toolUseBlock = promptReq.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
+                                let promptData: any = {};
+                                
+                                if (toolUseBlock) {
+                                    promptData = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
+                                }
 
                                 if (promptData.prompt) {
-                                    // Adım 2: Gemini API'den Base64 Resmi Çekme
+                                    // Step 2: Fetch Base64 Image from Gemini API
                                     const geminiApiKey = process.env.GEMINI_API_KEY;
                                     let b64Image = "";
 
                                     if (geminiApiKey) {
                                         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`;
                                         const geminiPayload = {
-                                            contents: [
-                                                {
-                                                    parts: [
-                                                        { text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }
-                                                    ]
-                                                }
-                                            ]
+                                            contents: [{
+                                                parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }]
+                                            }]
                                         };
 
                                         const geminiRes = await fetch(geminiUrl, {
@@ -328,7 +346,7 @@ STRICT RULES:
                                         console.warn("[GEMINI_MISSING_KEY]: GEMINI_API_KEY not found in environment variables.");
                                     }
 
-                                    // Adım 3: Base64 Görseli veya Fallback Metnini HTML olarak Editöre İletme
+                                    // Step 3: Dispatch Image HTML or Fallback
                                     if (b64Image) {
                                         const imgHtml = `
                                             <figure class="my-8">
@@ -336,24 +354,15 @@ STRICT RULES:
                                                 <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
                                             </figure>
                                         `;
-                                        sendEvent({
-                                            id: `img-${i}-${Date.now()}`,
-                                            type: 'image',
-                                            content: imgHtml,
-                                        });
+                                        sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                     } else {
-                                        // Gemini hata verirse makale üretimini bozmamak için promptu ekrana bas (Fallback)
                                         const fallbackHtml = `
                                             <div class="ai-prompt-container border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
                                                 <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 block">Visual Asset Pending (API Error)</span>
                                                 <p class="text-gray-800 font-mono text-sm leading-relaxed">${promptData.prompt}</p>
                                             </div>
                                         `;
-                                        sendEvent({
-                                            id: `img-prompt-${i}-${Date.now()}`,
-                                            type: 'image',
-                                            content: fallbackHtml,
-                                        });
+                                        sendEvent({ id: `img-prompt-${i}-${Date.now()}`, type: 'image', content: fallbackHtml });
                                     }
                                 }
                             } catch (promptError) {

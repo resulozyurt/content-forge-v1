@@ -3,9 +3,12 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 
-const openai = new OpenAI();
+// Initialize the Anthropic SDK
+const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY || "",
+});
 
 // Set a moderate timeout for inline editing operations
 export const maxDuration = 60;
@@ -19,7 +22,7 @@ export async function POST(req: Request) {
         }
 
         const userId = (session.user as any).id;
-        const EDIT_COST = 1; // Inline edits are computationally cheaper, deduct 1 credit
+        const EDIT_COST = 1; 
 
         // 2. Billing Guard validation
         await BillingGuard.checkCredits(userId, EDIT_COST);
@@ -35,44 +38,46 @@ export async function POST(req: Request) {
         
         switch (action) {
             case "Rewrite":
-                systemInstruction = "Rewrite the provided text to improve narrative flow, clarity, and professionalism while preserving the original meaning. Output ONLY the raw HTML paragraph (<p>) without markdown backticks.";
+                systemInstruction = "Rewrite the provided text to improve narrative flow, clarity, and professionalism while preserving the original meaning.";
                 break;
             case "Expand":
-                systemInstruction = "Expand the provided text by adding relevant semantic details, contextual examples, and analytical depth. Maintain a highly professional tone. Output ONLY the raw HTML paragraphs (<p>) without markdown backticks.";
+                systemInstruction = "Expand the provided text by adding relevant semantic details, contextual examples, and analytical depth. Maintain a highly professional tone.";
                 break;
             case "Condense":
-                systemInstruction = "Condense the provided text to be concise, punchy, and highly readable without losing core factual information. Output ONLY the raw HTML paragraph (<p>) without markdown backticks.";
+                systemInstruction = "Condense the provided text to be concise, punchy, and highly readable without losing core factual information.";
                 break;
             default:
                 return NextResponse.json({ error: "Invalid transformation action specified." }, { status: 400 });
         }
 
-        console.log(`[EDITOR_PIPELINE] Executing '${action}' operation for user ${userId}.`);
+        console.log(`[EDITOR_PIPELINE] Executing '${action}' operation utilizing Claude 3.5 Sonnet.`);
 
-        // 4. Execute the AI transformation (using the faster 'mini' model for low latency)
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini", 
+        // 4. Execute the AI transformation utilizing Claude 3.5 Sonnet
+        const anthropicResponse = await anthropic.messages.create({
+            model: "claude-sonnet-4-6", 
+            max_tokens: 2048,
+            system: `You are an elite NLP copy editor. 
+Context of the broader article: "${context}".
+
+CRITICAL RULES: 
+1. ${systemInstruction}
+2. You MUST use Native American English formatting and phrasing exclusively.
+3. Output ONLY the raw HTML paragraphs (<p>, <ul>) without any markdown backticks. Do not include introductory conversational text.
+4. Do NOT invent false data or hallucinate statistics.`,
             messages: [
                 {
-                    role: "system",
-                    content: `You are an elite NLP copy editor. 
-                    Context of the broader article: "${context}".
-                    
-                    CRITICAL RULES: 
-                    1. ${systemInstruction}
-                    2. You MUST use Native American English formatting and phrasing exclusively.
-                    3. Do NOT invent false data or hallucinate statistics.`
-                },
-                {
                     role: "user",
-                    content: `Modify the following text sequence:\n\n${text}`
+                    content: `Modify the following text sequence according to the instructions:\n\n${text}`
                 }
             ],
             temperature: 0.5,
         });
 
-        // 5. Cleanse the output of any residual markdown formatting
-        const resultText = completion.choices[0].message.content?.trim().replace(/```html|```/g, '') || text;
+        // 5. Extract and cleanse the output
+        let resultText = text;
+        if (anthropicResponse.content[0].type === 'text') {
+            resultText = anthropicResponse.content[0].text.trim().replace(/```html|```/g, '');
+        }
 
         // 6. Finalize the transaction
         await BillingGuard.deductCredits(userId, EDIT_COST, "EDIT");

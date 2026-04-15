@@ -5,10 +5,12 @@ import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
 import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
 import { headers } from "next/headers";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 
-// Initialize the OpenAI SDK
-const openai = new OpenAI();
+// Initialize the Anthropic SDK
+const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY || "",
+});
 
 // Extend serverless execution timeout to accommodate comprehensive document analysis
 export const maxDuration = 120; 
@@ -25,9 +27,9 @@ export async function POST(req: Request) {
         }
 
         const userId = (session.user as any).id;
-        const PROOFREAD_COST = 2; // Economical cost relative to full generation
+        const PROOFREAD_COST = 2; 
 
-        // 2. Rate Limiting: Prevent abuse of the NLP correction pipeline (15 requests per hour)
+        // 2. Rate Limiting: Prevent abuse of the NLP correction pipeline
         const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
         const limiter = await rateLimit(`proofread_${userId}_${ip}`, 15, 60 * 60 * 1000);
 
@@ -56,7 +58,7 @@ export async function POST(req: Request) {
 
         const targetLanguage = language || "English (US)";
 
-        console.log(`[PROOFREAD_PIPELINE] Initializing linguistic analysis for language context: ${targetLanguage}`);
+        console.log(`[PROOFREAD_PIPELINE] Initializing linguistic analysis via Claude 3.5 Sonnet for: ${targetLanguage}`);
 
         // 5. Advanced System Prompt Engineering for HTML-Preserving Grammatical Correction
         const systemPrompt = `You are an elite, meticulous copy editor and linguistic expert.
@@ -65,39 +67,56 @@ Your task is to proofread the provided HTML content and return the corrected HTM
 CRITICAL DIRECTIVES:
 1. TARGET LANGUAGE: Ensure the text conforms flawlessly to ${targetLanguage}. If the target is English, enforce Native American English grammar, syntax, vocabulary, and flow exclusively.
 2. PRESERVE HTML INTEGRITY: You MUST NOT alter, remove, or break any HTML tags (e.g., <h2>, <p>, <strong>, <a>, <img>). Only modify the text node content within these tags.
-3. ENHANCE READABILITY: Correct spelling, punctuation, and grammatical errors. Improve awkward phrasing for a professional, authoritative tone without changing the core meaning or the targeted SEO keywords.
-4. JSON OUTPUT FORMAT: Return your response ONLY as a valid JSON object matching this schema:
-{
-  "result": "The fully corrected HTML string."
-}
-5. NO MARKDOWN: Do not wrap the JSON output in markdown backticks (e.g., \`\`\`json). Return the raw JSON string directly.`;
+3. ENHANCE READABILITY: Correct spelling, punctuation, and grammatical errors. Improve awkward phrasing for a professional, authoritative tone without changing the core meaning or the targeted SEO keywords.`;
 
-        // 6. NLP Processing via OpenAI
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4o", // Utilizing the most capable model for nuanced linguistic tasks
-            response_format: { type: "json_object" },
+        // 6. NLP Processing via Anthropic Tool Use
+        const anthropicResponse = await anthropic.messages.create({
+            model: "claude-sonnet-4-6", 
+            max_tokens: 4096,
+            system: systemPrompt,
             messages: [
-                { role: "system", content: systemPrompt },
                 { role: "user", content: `Please proofread and optimize the following HTML content:\n\n${htmlContent}` }
             ],
-            temperature: 0.3, // Low temperature for high precision and factual consistency
+            tools: [
+                {
+                    name: "submit_correction",
+                    description: "Submits the structurally sound, linguistically corrected HTML payload.",
+                    input_schema: {
+                        type: "object",
+                        properties: {
+                            result: { type: "string", description: "The fully corrected HTML string." }
+                        },
+                        required: ["result"]
+                    }
+                }
+            ],
+            tool_choice: { type: "tool", name: "submit_correction" },
+            temperature: 0.2, // Low temperature for high precision and factual consistency
         });
 
-        const rawContent = completion.choices[0].message.content;
+        // 7. Extract and validate the strict Tool Use payload
+        const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
         
-        if (!rawContent) {
+        if (!toolUseBlock) {
             throw new Error("The NLP engine failed to return a valid correction payload.");
         }
 
-        // Robust parsing to handle potential model anomalies
-        const cleanedRaw = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
-        const parsedData = JSON.parse(cleanedRaw);
+        let parsedData: any = {};
+        if (typeof toolUseBlock.input === 'string') {
+            try {
+                parsedData = JSON.parse(toolUseBlock.input);
+            } catch (e) {
+                throw new Error("Invalid data format received from the AI engine.");
+            }
+        } else {
+            parsedData = toolUseBlock.input;
+        }
 
         if (!parsedData.result) {
             throw new Error("The returned payload is missing the expected 'result' field.");
         }
 
-        // 7. Finalize Transaction & Deduct Credits
+        // 8. Finalize Transaction & Deduct Credits
         await BillingGuard.deductCredits(userId, PROOFREAD_COST, "PROOFREAD");
         console.log(`[SUCCESS] Document proofreading completed. Deducted ${PROOFREAD_COST} credit(s) from user ${userId}.`);
 
