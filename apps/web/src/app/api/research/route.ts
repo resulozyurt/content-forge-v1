@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     const RESEARCH_COST = 1;
 
     // 2. Billing Guard Assessment
-    await BillingGuard.checkCredits(userId, RESEARCH_COST, "RESEARCH");
+    await BillingGuard.checkCredits(userId, RESEARCH_COST);
 
     const { topic, config } = await req.json();
 
