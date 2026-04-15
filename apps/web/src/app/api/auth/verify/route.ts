@@ -8,21 +8,21 @@ export async function POST(req: Request) {
     const { email, code } = await req.json();
 
     if (!email || !code) {
-      return NextResponse.json({ error: 'Email address and verification code are required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email address and verification code are required payloads.' }, { status: 400 });
     }
 
-    // 1. Retrieve the user record from the database
+    // 1. Retrieve the user record from the database to inspect their current verification state.
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
-      return NextResponse.json({ error: 'User account could not be located.' }, { status: 404 });
+      return NextResponse.json({ error: 'User account could not be located in the registry.' }, { status: 404 });
     }
 
     if (user.isVerified) {
       return NextResponse.json({ error: 'This account has already been successfully verified.' }, { status: 400 });
     }
 
-    // 2. Validate OTP expiration window
+    // 2. Validate the OTP expiration window to ensure the code has not surpassed its lifespan.
     if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
       return NextResponse.json({ error: 'The verification code has expired. Please request a new code.' }, { status: 400 });
     }
@@ -31,16 +31,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No active verification sequence found for this account.' }, { status: 400 });
     }
 
-    // 3. Cryptographically verify the provided OTP against the stored hash
+    // 3. Cryptographically verify the provided plain-text OTP against the stored bcrypt hash.
     const isOtpValid = await bcrypt.compare(code, user.otpCode);
 
     if (!isOtpValid) {
       return NextResponse.json({ error: 'The provided verification code is invalid.' }, { status: 400 });
     }
 
-    // 4. Execute atomic transaction to verify the user and provision core dependencies
+    // 4. Execute an atomic transaction to verify the user and provision core operational dependencies.
+    // Utilizing transactions prevents orphaned data if one of the operations fails.
     await prisma.$transaction(async (tx) => {
-      // Flag user as verified and clear the OTP payload
+      
+      // Flag the user as verified and scrub the sensitive OTP payload from the record.
       await tx.user.update({
         where: { id: user.id },
         data: {
@@ -50,7 +52,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // Provision the initial billing wallet required for AI generation
+      // Provision the initial billing wallet required for the AI generation pipelines.
       await tx.wallet.create({
         data: {
           userId: user.id,
@@ -58,7 +60,7 @@ export async function POST(req: Request) {
         },
       });
 
-      // Provision default application settings
+      // Provision default application settings establishing baseline behavior for the user.
       await tx.userSettings.create({
         data: {
           userId: user.id,

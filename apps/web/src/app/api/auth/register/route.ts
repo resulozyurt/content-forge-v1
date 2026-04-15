@@ -3,36 +3,25 @@ import { rateLimit, getRateLimitHeaders } from '@/lib/rate-limit';
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { prisma } from '@contentforge/database';
+import { Resend } from 'resend';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
 
-/**
- * Configure the SMTP transporter using environment variables.
- * For production, use reliable providers like AWS SES, SendGrid, or Mailgun.
- */
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com', // Fallback for local testing
-  port: parseInt(process.env.SMTP_PORT || '587', 10),
-  secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+// Initialize the Resend client utilizing the environment variable securely injected via Railway.
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: Request) {
   try {
-    // 1. Rate Limiting: Prevent registration spam attacks
+    // 1. Rate Limiting: Prevent registration spam and automated brute-force attacks at the edge.
     const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
-    const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000); // Strict limit: 5 registrations per hour per IP
+    const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000);
 
     if (!limiter.success) {
       return NextResponse.json(
         { error: 'Too many registration attempts. Please try again in an hour.' }, 
         { 
-            status: 429, 
-            headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+          status: 429, 
+          headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
         }
       );
     }
@@ -40,41 +29,42 @@ export async function POST(req: Request) {
     const { email, password } = await req.json();
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email and password fields are strictly required.' }, { status: 400 });
     }
 
-    // 2. Verify if the user already exists in the registry to prevent duplicate accounts
+    // 2. Verify if the user already exists in the registry to prevent duplicate accounts and collisions.
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      return NextResponse.json({ error: 'This email address is already registered.' }, { status: 400 });
+      return NextResponse.json({ error: 'This email address is already registered in our system.' }, { status: 400 });
     }
 
-    // 3. Encrypt the user's password utilizing bcrypt with a work factor of 10
+    // 3. Encrypt the user's password utilizing bcrypt with a secure work factor of 10.
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // 4. Generate a cryptographically secure 6-digit verification sequence
+    // 4. Generate a cryptographically secure 6-digit verification sequence.
     const plainOtpCode = crypto.randomInt(100000, 999999).toString();
     
-    // 5. Secure the OTP code via hashing before persisting to the database
+    // 5. Secure the OTP code via hashing before persisting to the database. Never store plain text.
     const hashedOtpCode = await bcrypt.hash(plainOtpCode, 10);
     
-    // OTP validity window: Expires strictly 15 minutes from generation
+    // OTP validity window: Expires strictly 15 minutes from the exact moment of generation.
     const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // 6. Persist the new user payload to the database
+    // 6. Persist the new user payload to the database with a pending verification state.
     await prisma.user.create({
       data: {
         email,
         passwordHash,
-        otpCode: hashedOtpCode, // Crucial: Store the hash, never the plain text
+        otpCode: hashedOtpCode, 
         otpExpiresAt,
+        isVerified: false,
       },
     });
 
-    // 7. Construct the HTML payload for the OTP verification email using the plain code
-    const mailOptions = {
-      from: process.env.SMTP_FROM || '"Content Forge Security" <noreply@contentforge.ai>',
-      to: email,
+    // 7. Dispatch the verification email via Resend API utilizing the generated plain code.
+    const { error: emailError } = await resend.emails.send({
+      from: 'Content Forge Security <onboarding@contentforge.ai>',
+      to: [email],
       subject: 'Verify Your Identity - Content Forge',
       html: `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;">
@@ -94,16 +84,14 @@ export async function POST(req: Request) {
           </p>
         </div>
       `,
-    };
+    });
 
-    // 8. Dispatch the verification email via the configured SMTP relay
-    try {
-      await transporter.sendMail(mailOptions);
+    // We proceed with the registration response even if the email pipeline fails. 
+    // The user record exists, and they can utilize a "Resend OTP" fallback endpoint later.
+    if (emailError) {
+      console.error('[EMAIL_DISPATCH_FAULT]: Failed to route OTP email via Resend API.', emailError);
+    } else {
       console.log(`[AUTH_PIPELINE] Verification sequence successfully dispatched to: ${email}`);
-    } catch (emailError) {
-      console.error('[EMAIL_DISPATCH_FAULT]: Failed to route OTP email to the SMTP server.', emailError);
-      // We do not block the registration response here. If the email fails (e.g., bad SMTP config),
-      // the user is still created, but they will need to use a "Resend OTP" feature later once the SMTP is fixed.
     }
 
     return NextResponse.json({ 
