@@ -183,7 +183,7 @@ export default async function DashboardPage({
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                                {recentDocuments.map((doc) => (
+                                {recentDocuments.map((doc: { id: string; status: string; outputContent: string | null; createdAt: Date; inputPayload?: any }) => (
                                     <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
                                         <td className="p-4">
                                             <span className="font-bold text-gray-900 dark:text-white truncate block max-w-xs sm:max-w-md">
