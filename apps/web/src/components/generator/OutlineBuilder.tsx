@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ListTree, Plus, Trash2, FileText, CheckCircle2, Wand2, GripVertical } from "lucide-react";
+import { ListTree, Plus, Trash2, FileText, CheckCircle2, Wand2, GripVertical, Loader2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ResearchResultData, FinalOutlineData } from "@/types/generator";
 import {
@@ -34,9 +34,6 @@ interface HeadingItem {
     text: string;
 }
 
-/**
- * Sub-component for individual draggable heading items utilizing dnd-kit mechanics.
- */
 function SortableHeadingItem({ item, onRemove }: { item: HeadingItem, onRemove: (id: string) => void }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
 
@@ -91,33 +88,47 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
     const [myOutline, setMyOutline] = useState<HeadingItem[]>([]);
     const [customHeading, setCustomHeading] = useState("");
     const [customLevel, setCustomLevel] = useState<'h2' | 'h3'>('h2');
+    const [isAIGenerating, setIsAIGenerating] = useState(false);
 
-    // Configure high-fidelity sensors for standard pointer devices and keyboard accessibility
     const sensors = useSensors(
-        useSensor(PointerSensor, {
-            activationConstraint: {
-                distance: 5, // Requires 5px movement to initialize drag, preventing accidental clicks
-            },
-        }),
-        useSensor(KeyboardSensor, {
-            coordinateGetter: sortableKeyboardCoordinates,
-        })
+        useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
-    // Bootstrap the outline payload utilizing the highest-ranking competitor as a baseline template
-    useEffect(() => {
-        if (researchData?.competitors?.length > 0 && myOutline.length === 0) {
-            const firstCompetitor = researchData.competitors.find(c => c.selected);
-            if (firstCompetitor && firstCompetitor.headings) {
-                const initialHeadings = firstCompetitor.headings.map((h: any, i: number) => ({
-                    id: `init-${i}-${Date.now()}`, // Ensure globally unique identifiers
-                    level: h.level === 'h1' ? 'h2' : h.level, // SEO Rule: Force rogue H1s into compliant H2 structures
+    // AI Semantic Outline Generation Hook
+    const handleAIDraftOutline = async () => {
+        try {
+            setIsAIGenerating(true);
+            const targetTopic = (researchData as any).topic || researchData.keywords?.[0]?.text || "SEO Topic";
+
+            const response = await fetch('/api/generate/outline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    topic: targetTopic,
+                    researchData: researchData,
+                    language: (researchData as any).language || "English (US)"
+                })
+            });
+
+            if (!response.ok) throw new Error("AI Outline generation failed.");
+
+            const data = await response.json();
+            if (data.outline) {
+                const formattedHeadings = data.outline.map((h: any, i: number) => ({
+                    id: `ai-${i}-${Date.now()}`,
+                    level: h.level as 'h2' | 'h3',
                     text: h.text
                 }));
-                setMyOutline(initialHeadings);
+                setMyOutline(formattedHeadings);
             }
+        } catch (error) {
+            console.error(error);
+            alert("Failed to generate AI outline. Please try again.");
+        } finally {
+            setIsAIGenerating(false);
         }
-    }, [researchData, myOutline.length]);
+    };
 
     const handleAddFromCompetitor = (heading: { level: string, text: string }) => {
         setMyOutline(prev => [...prev, {
@@ -143,10 +154,8 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
         setMyOutline(prev => prev.filter(item => item.id !== id));
     };
 
-    // Resolves the final state of the array post-drag operation
     const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
-
         if (over && active.id !== over.id) {
             setMyOutline((items) => {
                 const oldIndex = items.findIndex((item) => item.id === active.id);
@@ -162,12 +171,10 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             return;
         }
 
-        // Aggregate user-validated NLP targets
         const selectedKeywords = researchData.keywords
             ? researchData.keywords.filter((kw: any) => kw.selected).map((kw: any) => kw.text)
             : [];
 
-        // Aggregate verified competitor URLs to feed the external link attribution engine
         const competitorUrls = researchData.competitors
             ? researchData.competitors.filter((c: any) => c.selected).map((c: any) => c.url)
             : [];
@@ -191,18 +198,28 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
                         Outline Architect
                     </h2>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                        Engineer your document structure. Inject competitor headings or craft custom sections, then drag to reorder.
+                        Engineer your document structure. Inject competitor headings, draft with AI, or craft custom sections.
                     </p>
                 </div>
-                <div className="flex items-center gap-3 bg-indigo-50 dark:bg-indigo-900/20 px-4 py-2 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
-                    <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400">Total Sections:</span>
-                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-300">{myOutline.length}</span>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={handleAIDraftOutline}
+                        disabled={isAIGenerating}
+                        className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:scale-105 transition-all disabled:opacity-50"
+                    >
+                        {isAIGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                        {isAIGenerating ? "Synthesizing..." : "AI Draft Outline"}
+                    </button>
+                    <div className="flex items-center gap-3 bg-indigo-50 dark:bg-indigo-900/20 px-4 py-2 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
+                        <span className="text-sm font-bold text-indigo-700 dark:text-indigo-400">Total:</span>
+                        <span className="text-xl font-black text-indigo-600 dark:text-indigo-300">{myOutline.length}</span>
+                    </div>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-                {/* LEFT DOMAIN: Competitor Serps (Source Pool) */}
+                {/* LEFT DOMAIN: Competitor Serps */}
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm flex flex-col h-[700px]">
                     <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
                         <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -242,7 +259,7 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
                     </div>
                 </div>
 
-                {/* RIGHT DOMAIN: User Outline (Target Builder) */}
+                {/* RIGHT DOMAIN: User Outline */}
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm flex flex-col h-[700px]">
                     <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 flex justify-between items-center">
                         <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -251,7 +268,6 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
                         </h3>
                     </div>
 
-                    {/* Custom Heading Form */}
                     <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
                         <form onSubmit={handleAddCustom} className="flex gap-2">
                             <select
@@ -275,12 +291,11 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
                         </form>
                     </div>
 
-                    {/* DND Sortable List Environment */}
                     <div className="flex-1 overflow-y-auto p-4 bg-gray-50/50 dark:bg-gray-900/50">
                         {myOutline.length === 0 ? (
                             <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-3">
                                 <ListTree className="w-12 h-12 opacity-20" />
-                                <p className="text-sm">Architecture is empty. Inject headings from the SERP pool.</p>
+                                <p className="text-sm">Architecture is empty. Inject headings or use AI Draft.</p>
                             </div>
                         ) : (
                             <DndContext
@@ -306,7 +321,6 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
                         )}
                     </div>
 
-                    {/* Execution Trigger */}
                     <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
                         <button
                             onClick={handleFinalize}
