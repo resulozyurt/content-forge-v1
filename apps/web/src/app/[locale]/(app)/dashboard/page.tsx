@@ -48,7 +48,7 @@ export default async function DashboardPage({
     });
 
     const totalDocuments = allDocs.length;
-    const totalWords = allDocs.reduce((acc, doc) => acc + getWordCount(doc.outputContent), 0);
+    const totalWords = allDocs.reduce((acc: number, doc) => acc + getWordCount(doc.outputContent), 0);
 
     // 3. Tablo için sadece EN SON 5 dokümanı detaylı çekiyoruz
     const recentDocuments = await prisma.contentJob.findMany({
