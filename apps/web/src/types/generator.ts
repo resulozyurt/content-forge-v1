@@ -42,6 +42,7 @@ export interface ResearchResultData {
   keywords: { text: string; selected: boolean }[];
   competitors: CompetitorData[];
   questions: { text: string; selected: boolean }[];
+  gaps?: string[];
 }
 
 export interface OutlineHeading {
