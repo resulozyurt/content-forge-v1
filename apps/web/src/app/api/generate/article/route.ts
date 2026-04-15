@@ -36,7 +36,7 @@ const generationPayloadSchema = z.object({
         wpSitemap: z.string().optional().default(""),
         targetLength: z.string().optional().default("1000"), // Word count objective
         enableBrandVoice: z.boolean().optional().default(false) // Brand injection flag
-    }).optional().default({})
+    })
 });
 
 export async function POST(req: NextRequest) {
