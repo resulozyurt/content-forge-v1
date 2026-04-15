@@ -5,12 +5,15 @@ import { authOptions } from "@/lib/auth";
 import { BillingGuard } from "@/lib/billing";
 import { rateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
 import { headers } from "next/headers";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import * as cheerio from "cheerio";
 
-const openai = new OpenAI();
+// Initialize the Anthropic SDK to leverage Claude 3.5 Sonnet's deep context window
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY || "",
+});
 
-// Extend execution timeout for robust asynchronous scraping and chained AI operations
+// Extend execution timeout to accommodate deep scraping and Claude's complex reasoning
 export const maxDuration = 300; 
 
 export interface ScrapedData {
@@ -19,17 +22,17 @@ export interface ScrapedData {
   title: string;
   wordCount: number;
   headings: { level: string; text: string }[];
+  bodyText: string; // Crucial addition: Storing raw text for Claude's semantic TF-IDF simulation
 }
 
 /**
  * Advanced fetch wrapper utilizing ScraperAPI to bypass Cloudflare, Datadome, and JS-rendering walls.
- * If SCRAPER_API_KEY is not defined in the environment, it gracefully falls back to a standard fetch with rotated headers.
+ * If SCRAPER_API_KEY is not defined, it gracefully falls back to a standard fetch with rotated headers.
  */
 const fetchWithScrapingInfrastructure = async (url: string, signal: AbortSignal): Promise<string | null> => {
   try {
     const scraperApiKey = process.env.SCRAPER_API_KEY;
     
-    // Route traffic through the proxy network if the key is provisioned
     const targetUrl = scraperApiKey 
         ? `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(url)}&render=true`
         : url;
@@ -101,14 +104,14 @@ export async function POST(req: Request) {
     
     console.log(`[PIPELINE_INIT] Fetching live SERP data for primary keyword: "${topic}"...`);
 
-    // 3. Procure Google SERP Data (Fetch top 15 to maintain a standby buffer for deselection)
+    // 3. Procure Google SERP Data (Fetch top 15 to maintain a standby buffer)
     const serperResponse = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: {
         "X-API-KEY": serperApiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ q: topic, num: 15 }), // Increased to 15 for the standby buffer
+      body: JSON.stringify({ q: topic, num: 15 }), 
     });
 
     if (!serperResponse.ok) throw new Error("Failed to retrieve data from the primary search provider.");
@@ -124,7 +127,7 @@ export async function POST(req: Request) {
     // 4. Concurrent Web Scraping with Fault Tolerance
     const scrapePromises = topUrls.map(async (url: string, index: number) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10-second hard timeout per worker
+      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second hard timeout
 
       const html = await fetchWithScrapingInfrastructure(url, controller.signal);
       clearTimeout(timeoutId);
@@ -134,7 +137,7 @@ export async function POST(req: Request) {
       try {
         const $ = cheerio.load(html);
 
-        // Aggressive DOM sanitization to reduce noise and LLM token bloat
+        // Aggressive DOM sanitization to reduce noise
         $("script, style, noscript, iframe, img, svg, nav, footer, header, aside, .sidebar, .comments, .advertisement").remove();
         
         const textContent = $("body").text().replace(/\s+/g, " ").trim();
@@ -157,7 +160,8 @@ export async function POST(req: Request) {
           url,
           title: pageTitle.substring(0, 70),
           wordCount,
-          headings: headings.slice(0, 25) // Cap to prevent context window overflow
+          headings: headings.slice(0, 25),
+          bodyText: textContent.substring(0, 4000) // Provide 4K chars of pure context per competitor to Claude
         } as ScrapedData;
 
       } catch (parseError) {
@@ -177,75 +181,95 @@ export async function POST(req: Request) {
       }, { status: 422 });
     }
 
-    console.log(`[NLP_ROUTING] Successfully extracted data. Executing Chained AI Prompts...`);
+    console.log(`[NLP_ROUTING] Successfully extracted data for ${validScrapedResults.length} competitors. Executing Claude 3.5 Sonnet Tool Use...`);
 
-    // 5. CHAINED AI - Step 1: Core Search Intent & Keyword Matrix
-    const intentCompletion = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // Faster model for initial classification
-      response_format: { type: "json_object" },
+    // 5. Constructing the Context payload for Claude
+    const competitorContext = validScrapedResults.slice(0, 10).map(c => 
+      `--- Competitor: ${c.title} ---\nHeadings: ${c.headings.map(h => h.text).join(", ")}\nContent Snippet: ${c.bodyText}`
+    ).join("\n\n");
+
+    // 6. CLAUDE 3.5 SONNET - Tool Use Execution for strict schema adherence
+    const anthropicResponse = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-20240620",
+      max_tokens: 4096,
+      temperature: 0.2, // Low temperature for highly analytical and structured output
+      system: `You are an elite SEO Strategist and Data Scientist. Your task is to analyze raw competitor content and extract semantic insights mimicking a mathematical TF-IDF NLP model. Target output language: ${language}.`,
       messages: [
-        {
-          role: "system",
-          content: `You are an elite SEO Strategist. Analyze the target topic and return a JSON object with strictly these keys:
-{
-  "searchIntent": "String (e.g., Informational, Transactional, Commercial Investigation)",
-  "primaryKeywords": ["kw1", "kw2", "kw3"],
-  "secondaryKeywords": ["kw4", "kw5", "kw6", "kw7"]
-}
-Rules: Extract LSI and semantic keywords. Target Language: ${language}.`
-        },
-        { role: "user", content: `Target Topic: "${topic}"` }
-      ]
-    });
-
-    const intentData = JSON.parse(intentCompletion.choices[0].message.content || "{}");
-
-    // 6. CHAINED AI - Step 2: Content Gap & PAA (People Also Ask) Analysis based on competitors
-    // We only send the headings to save tokens and focus the AI on structural gaps
-    const competitorHeadingsMap = validScrapedResults.slice(0, 10).map(c => ({ title: c.title, headings: c.headings.map(h => h.text) }));
-
-    const gapCompletion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `You are a Senior Content Architect. Review the structural headings of the top ranking competitors for the topic.
-Identify critical content gaps (what they missed) and frequently asked questions.
-Return ONLY a JSON object matching this schema:
-{
-  "gaps": ["Gap 1", "Gap 2", "Gap 3"],
-  "questions": [
-    {"text": "Question 1", "selected": true},
-    {"text": "Question 2", "selected": true}
-  ]
-}
-Rules: Target Language: ${language}. Depth: ${contentDepth}.`
-        },
         {
           role: "user",
-          content: `Target Topic: "${topic}"\nCompetitor Structures:\n${JSON.stringify(competitorHeadingsMap)}`
+          content: `Target Topic: "${topic}"\n\nAnalyze the following top-ranking competitor content:\n\n${competitorContext}\n\nExecute the generate_research_report tool to provide your structured findings.`
         }
-      ]
+      ],
+      tools: [
+        {
+          name: "generate_research_report",
+          description: "Generates a strict JSON report containing search intent, keywords, gaps, and PAA questions based on competitor analysis.",
+          input_schema: {
+            type: "object",
+            properties: {
+              searchIntent: { 
+                type: "string", 
+                description: "The primary search intent (e.g., Informational, Transactional, Commercial)." 
+              },
+              primaryKeywords: { 
+                type: "array", 
+                items: { type: "string" }, 
+                description: "Top 3-5 primary semantic keywords." 
+              },
+              secondaryKeywords: { 
+                type: "array", 
+                items: { type: "string" }, 
+                description: "Exactly 10-15 LSI and secondary keywords extracted by analyzing frequent n-grams in the competitor text snippets." 
+              },
+              gaps: { 
+                type: "array", 
+                items: { type: "string" }, 
+                description: "List exactly 5 to 7 highly specific content gaps. Identify what the competitors FAILED to mention or cover in-depth. Avoid generic gaps like 'missing images'." 
+              },
+              questions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    text: { type: "string" },
+                    selected: { type: "boolean" }
+                  },
+                  required: ["text", "selected"]
+                },
+                description: "List exactly 10 to 12 People Also Ask (PAA) and frequently asked questions related to the topic. Set 'selected' to true for all."
+              }
+            },
+            required: ["searchIntent", "primaryKeywords", "secondaryKeywords", "gaps", "questions"]
+          }
+        }
+      ],
+      tool_choice: { type: "tool", name: "generate_research_report" }
     });
 
-    const gapData = JSON.parse(gapCompletion.choices[0].message.content || "{}");
+    // 7. Extract the Tool Use payload from Claude's response
+    const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
+    
+    if (!toolUseBlock) {
+      throw new Error("Claude failed to execute the required JSON structuring tool.");
+    }
 
-    // 7. Assemble the final unified payload
+    const reportData = toolUseBlock.input as any;
+
+    // 8. Assemble the final unified payload
     const researchData = {
-      intent: intentData.searchIntent || "Informational",
+      intent: reportData.searchIntent || "Informational",
       keywords: [
-        ...(intentData.primaryKeywords || []).map((k: string) => ({ text: k, selected: true })),
-        ...(intentData.secondaryKeywords || []).map((k: string) => ({ text: k, selected: false }))
+        ...(reportData.primaryKeywords || []).map((k: string) => ({ text: k, selected: true })),
+        ...(reportData.secondaryKeywords || []).map((k: string) => ({ text: k, selected: false }))
       ],
-      competitors: validScrapedResults, // Full array including standbys (up to 15)
-      questions: gapData.questions || [],
-      gaps: gapData.gaps || []
+      competitors: validScrapedResults, 
+      questions: reportData.questions || [],
+      gaps: reportData.gaps || []
     };
     
-    // 8. Finalize Transaction & Deduct Credits
+    // 9. Finalize Transaction & Deduct Credits
     await BillingGuard.deductCredits(userId, RESEARCH_COST, "RESEARCH");
-    console.log(`[SUCCESS] Research pipeline finalized. Deducted ${RESEARCH_COST} credit(s).`);
+    console.log(`[SUCCESS] Claude 3.5 Sonnet pipeline finalized. Deducted ${RESEARCH_COST} credit(s).`);
 
     return NextResponse.json({ data: researchData }, { status: 200 });
 

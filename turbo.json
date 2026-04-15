@@ -9,6 +9,7 @@
       "outputs": [".next/**", "!.next/cache/**"],
       "env": [
         "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
         "ENCRYPTION_KEY",
         "DATABASE_URL",
         "NEXTAUTH_SECRET",
