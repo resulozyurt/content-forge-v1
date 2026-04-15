@@ -10,16 +10,14 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@contentforge/database"; 
 
-// Initialize AI SDK clients. Anthropic is prioritized as the primary cognitive engine.
+// Initialize AI SDK clients. Priority: Anthropic (Claude)
 const openai = new OpenAI();
 const anthropic = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY || "",
 });
 
-// Extend the maximum execution duration for serverless environments (Vercel/Railway)
 export const maxDuration = 300;
 
-// Define a rigorous input validation schema to prevent malformed requests and injection attacks
 const generationPayloadSchema = z.object({
     outlineData: z.object({
         headings: z.array(z.object({
@@ -34,7 +32,7 @@ const generationPayloadSchema = z.object({
         language: z.string().optional().default("English (US)"),
         tone: z.string().optional().default("Highly Professional, Data-Driven, Authoritative"),
         depth: z.string().optional().default("Comprehensive"),
-        engine: z.string().optional().default("claude-3-5-sonnet-latest"),
+        engine: z.string().optional().default("claude-sonnet-4-6"),
         wpSitemap: z.string().optional().default(""),
         targetLength: z.string().optional().default("1000"), 
         enableBrandVoice: z.boolean().optional().default(false) 
@@ -42,6 +40,11 @@ const generationPayloadSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+    let currentJobId: string | null = null;
+    let areCreditsDeducted = false;
+    const ARTICLE_COST = 5;
+    let currentUserId = "";
+
     try {
         // 1. Authentication & Session Validation
         const session = await getServerSession(authOptions);
@@ -52,15 +55,15 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const userId = (session.user as any).id;
+        currentUserId = (session.user as any).id;
         
-        // 2. Rate Limiting: 10 full article generations per hour per user
+        // 2. Rate Limiting Execution
         const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
-        const limiter = await rateLimit(`gen_article_${userId}_${ip}`, 10, 60 * 60 * 1000);
+        const limiter = await rateLimit(`gen_article_${currentUserId}_${ip}`, 10, 60 * 60 * 1000);
 
         if (!limiter.success) {
             return new Response(
-                JSON.stringify({ message: "Generation quota reached. Please check back in an hour." }), 
+                JSON.stringify({ message: "Generation quota reached. Please check back later." }), 
                 { 
                     status: 429, 
                     headers: { 
@@ -71,19 +74,14 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const ARTICLE_COST = 5;
-
-        // 3. Billing Guard: Verify available credits prior to initialization
-        await BillingGuard.checkCredits(userId, ARTICLE_COST);
-
-        // 4. Input Validation via Zod Schema
+        // 3. Payload Validation
         const rawBody = await req.json();
         const parseResult = generationPayloadSchema.safeParse(rawBody);
 
         if (!parseResult.success) {
             return new Response(
                 JSON.stringify({ 
-                    message: "Invalid payload provided. Please verify the request formatting.", 
+                    message: "Invalid payload provided.", 
                     errors: parseResult.error.format() 
                 }), 
                 { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -92,39 +90,54 @@ export async function POST(req: NextRequest) {
 
         const { outlineData, config } = parseResult.data;
 
-        // 5. Capture UI Configurations
-        const language = config.language;
-        const tone = config.tone;
-        const depth = config.depth;
-        const engine = config.engine;
-        const wpSitemap = config.wpSitemap;
-        const totalHeadings = outlineData.headings.length;
+        // 4. Persistence Init: Retrieve tool context and create a pending Job record
+        const activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
+        if (!activeTool) {
+            throw new Error("System Configuration Fault: No active AI tools found in the database.");
+        }
 
-        // Calculate dynamic word count per section to prevent LLM truncation
+        const contentJob = await prisma.contentJob.create({
+            data: {
+                userId: currentUserId,
+                toolId: activeTool.id,
+                aiModel: config.engine.toLowerCase().includes("claude") ? "claude-sonnet-4-6" : "GPT_4_OMNI",
+                status: "PROCESSING",
+                inputPayload: rawBody,
+            }
+        });
+        currentJobId = contentJob.id;
+
+        // 5. Atomic Billing: Deduct credits BEFORE initializing the heavy stream
+        await BillingGuard.checkCredits(currentUserId, ARTICLE_COST);
+        await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
+        areCreditsDeducted = true;
+
+        // 6. Context Preparation
+        const totalHeadings = outlineData.headings.length;
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
         const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
 
-        // 6. Fetch Brand Identity Context
         let brandContext = "";
         let brandNameContext = "";
+        
         if (config.enableBrandVoice) {
             try {
-                const brandProfile = await prisma.brandProfile.findUnique({ where: { userId } });
+                const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
                     brandNameContext = brandProfile.name;
                     brandContext = `\nBRAND IDENTITY INJECTION RULE:
-You MUST organically weave the following brand into the content as an authoritative solution, where contextually relevant.
+You MUST organically weave the following brand into the content.
 - Brand Name: ${brandProfile.name}
-- Core Offerings & Tone: ${brandProfile.description}
-${brandProfile.sitemapUrl ? `- Brand Sitemap/Links: Use this to guide internal linking: ${brandProfile.sitemapUrl}` : ''}
-CRITICAL: Do not make it sound like a cheap advertisement. Weave it naturally into the narrative as a premier industry solution.`;
+- Core Offerings: ${brandProfile.description}
+${brandProfile.sitemapUrl ? `- Internal Link Guide: ${brandProfile.sitemapUrl}` : ''}
+CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
                 }
             } catch (brandError) {
                 console.warn("[BRAND_FETCH_WARNING]: Could not retrieve brand profile.", brandError);
             }
         }
 
-        // 7. Initialize Server-Sent Events (SSE) Stream Architecture
+        // 7. Stream Architecture Initialization
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream({
@@ -140,11 +153,10 @@ CRITICAL: Do not make it sound like a cheap advertisement. Weave it naturally in
                 };
 
                 try {
-                    // Dynamic Internal Link Pool Configuration
                     let internalLinks: string[] = [];
-                    if (wpSitemap) {
+                    if (config.wpSitemap) {
                         try {
-                            const sitemapRes = await fetch(wpSitemap, { signal: AbortSignal.timeout(5000) });
+                            const sitemapRes = await fetch(config.wpSitemap, { signal: AbortSignal.timeout(5000) });
                             if (sitemapRes.ok) {
                                 const sitemapXml = await sitemapRes.text();
                                 const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g));
@@ -157,27 +169,27 @@ CRITICAL: Do not make it sound like a cheap advertisement. Weave it naturally in
 
                     const sourceUrls = outlineData.sourceUrls;
                     const externalLinksContext = sourceUrls.length > 0 
-                        ? `EXTERNAL LINK RULE: You MUST organically insert ONE external link using EXACTLY one of these verified URLs: ${sourceUrls.join(', ')}. NEVER hallucinate or invent URLs.`
-                        : `EXTERNAL LINK RULE: Do not add any external links as no verified sources were provided.`;
+                        ? `EXTERNAL LINK RULE: Organically insert ONE external link from: ${sourceUrls.join(', ')}.`
+                        : `EXTERNAL LINK RULE: Do not add external links.`;
 
                     const internalLinksContext = internalLinks.length > 0
-                        ? `INTERNAL LINK RULE: You MUST organically insert ONE internal link using a relevant URL from this list: ${internalLinks.join(', ')}. Format: <a href="[URL]" class="text-blue-600 hover:underline">[Anchor Text]</a>.`
-                        : `INTERNAL LINK RULE: Skip internal linking altogether as no valid sitemap URLs were detected.`;
+                        ? `INTERNAL LINK RULE: Organically insert ONE internal link from: ${internalLinks.join(', ')}. Use format: <a href="[URL]">[Anchor Text]</a>.`
+                        : `INTERNAL LINK RULE: Skip internal linking.`;
 
-                    // Core SEO & NLP System Prompt tailored for Claude's analytical strengths
                     const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
 Task: Write a high-density, expert-level section for the heading provided.
 
 STRICT RULES:
-1. NO FLUFF: Avoid generic introductions. Deliver pure, factual, and analytical value immediately.
-2. LANGUAGE: EXACTLY ${language}. If English, utilize Native American English phrasing exclusively.
-3. TONE: ${tone}.
-4. DEPTH: ${depth}.
-5. LENGTH TARGET: Write approximately ${wordsPerSection} words for this section. Ensure the narrative is complete and NEVER truncated.
+1. NO FLUFF: Deliver pure, factual, analytical value immediately.
+2. LANGUAGE: EXACTLY ${config.language}.
+3. TONE: ${config.tone}.
+4. DEPTH: ${config.depth}.
+5. LENGTH TARGET: ~${wordsPerSection} words. NEVER truncate.
 6. ${externalLinksContext}
 7. ${internalLinksContext}${brandContext}`;
 
                     let h2Counter = 0;
+                    let fullGeneratedHtml = ""; // HTML Accumulator for database persistence
 
                     // Primary Generation Loop
                     for (let i = 0; i < outlineData.headings.length; i++) {
@@ -188,14 +200,13 @@ STRICT RULES:
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        const userMessage = `Original Heading: "${heading.text}"\nTarget NLP Keyword to seamlessly incorporate: "${targetKeyword}"`;
+                        const userMessage = `Original Heading: "${heading.text}"\nTarget NLP Keyword: "${targetKeyword}"`;
                         
                         let finalHeadingText = heading.text;
                         let generatedText = "";
 
-                        // A. Dynamic Engine Routing (Prioritizing Claude Tool Use)
                         try {
-                            if (engine.toLowerCase().includes("claude")) {
+                            if (config.engine.toLowerCase().includes("claude")) {
                                 const anthropicResponse = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6",
                                     max_tokens: 4096,
@@ -204,12 +215,12 @@ STRICT RULES:
                                     tools: [
                                         {
                                             name: "generate_section",
-                                            description: "Generates the semantic HTML content and refined heading.",
+                                            description: "Generates semantic HTML content and a refined heading.",
                                             input_schema: {
                                                 type: "object",
                                                 properties: {
-                                                    rewrittenHeading: { type: "string", description: "A highly engaging, unique, and SEO-optimized variation of the heading." },
-                                                    htmlContent: { type: "string", description: "The raw HTML content (<p>, <ul>, <strong>) for this section. No markdown backticks." }
+                                                    rewrittenHeading: { type: "string" },
+                                                    htmlContent: { type: "string" }
                                                 },
                                                 required: ["rewrittenHeading", "htmlContent"]
                                             }
@@ -221,22 +232,19 @@ STRICT RULES:
                                 
                                 const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                                 if (toolUseBlock) {
-                                    let parsedData: any = {};
-                                    if (typeof toolUseBlock.input === 'string') {
-                                        parsedData = JSON.parse(toolUseBlock.input);
-                                    } else {
-                                        parsedData = toolUseBlock.input;
-                                    }
+                                    const parsedData: any = typeof toolUseBlock.input === 'string' 
+                                        ? JSON.parse(toolUseBlock.input) 
+                                        : toolUseBlock.input;
+                                        
                                     finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                     generatedText = parsedData.htmlContent || "";
                                 }
                             } else {
-                                // Fallback to OpenAI if explicitly requested by the user
                                 const textCompletion = await openai.chat.completions.create({
                                     model: "gpt-4o",
                                     response_format: { type: "json_object" },
                                     messages: [
-                                        { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object matching: { "rewrittenHeading": "...", "htmlContent": "..." }` },
+                                        { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object: { "rewrittenHeading": "...", "htmlContent": "..." }` },
                                         { role: "user", content: userMessage }
                                     ],
                                     temperature: 0.6,
@@ -248,13 +256,16 @@ STRICT RULES:
                             }
 
                         } catch (parseError) {
-                            console.error("[PARSE_FAULT] Failed to execute generation pipeline.", parseError);
-                            generatedText = "<p>The content pipeline encountered a formatting fault during execution.</p>";
+                            console.error("[PARSE_FAULT] Pipeline execution failed.", parseError);
+                            generatedText = "<p>Content pipeline encountered a formatting fault.</p>";
                         }
 
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
 
-                        // B. Dispatch Content Blocks to the Client
+                        // Accumulate Core Text Content
+                        fullGeneratedHtml += `<${heading.level}>${finalHeadingText}</${heading.level}>\n${generatedText}\n`;
+
+                        // Dispatch Text Blocks to Client
                         sendEvent({
                             id: `h-${i}-${Date.now()}`,
                             type: heading.level,
@@ -267,27 +278,23 @@ STRICT RULES:
                             content: generatedText,
                         });
 
-                        // C. Visual Asset Generation (Migrated to Claude Tool-Use + Gemini Flash)
+                        // Visual Asset Generation
                         if (heading.level === 'h2' && h2Counter % 2 === 0) {
                             try {
-                                // Step 1: Generate Visual Metadata via Claude
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
                                     max_tokens: 1000,
-                                    system: `You are an expert art director and SEO specialist. 
-TASK: Create a highly detailed image generation prompt and SEO metadata.
-
+                                    system: `You are an expert art director. Create visual metadata for an image.
 CRITICAL RULES:
-1. The 'prompt' MUST be in English. The SEO fields must be in ${language}.
-2. Style: ULTRA-REALISTIC, DSLR photography, 35mm lens, natural lighting. NO text in images.
-${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameContext}.` : ''}`,
+1. The 'prompt' MUST be in English. SEO fields must be in ${config.language}.
+2. Style: ULTRA-REALISTIC, DSLR photography, natural lighting. NO text.`,
                                     messages: [
-                                        { role: "user", content: `Create visual metadata for an article section titled: "${finalHeadingText}".` }
+                                        { role: "user", content: `Create visual metadata for section: "${finalHeadingText}".` }
                                     ],
                                     tools: [
                                         {
                                             name: "generate_image_metadata",
-                                            description: "Provides structured metadata for image generation.",
+                                            description: "Provides metadata for image generation.",
                                             input_schema: {
                                                 type: "object",
                                                 properties: {
@@ -312,9 +319,9 @@ ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameC
                                 }
 
                                 if (promptData.prompt) {
-                                    // Step 2: Fetch Base64 Image from Gemini API
                                     const geminiApiKey = process.env.GEMINI_API_KEY;
                                     let b64Image = "";
+                                    let imgHtml = "";
 
                                     if (geminiApiKey) {
                                         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`;
@@ -339,30 +346,27 @@ ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameC
                                                     break;
                                                 }
                                             }
-                                        } else {
-                                            console.error("[GEMINI_API_ERROR]: Failed to fetch image.", await geminiRes.text());
                                         }
-                                    } else {
-                                        console.warn("[GEMINI_MISSING_KEY]: GEMINI_API_KEY not found in environment variables.");
                                     }
 
-                                    // Step 3: Dispatch Image HTML or Fallback
                                     if (b64Image) {
-                                        const imgHtml = `
+                                        imgHtml = `
                                             <figure class="my-8">
-                                                <img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200 dark:border-gray-800" />
+                                                <img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200" />
                                                 <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
                                             </figure>
                                         `;
+                                        fullGeneratedHtml += `${imgHtml}\n`; // Accumulate Image HTML
                                         sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                     } else {
-                                        const fallbackHtml = `
-                                            <div class="ai-prompt-container border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
-                                                <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2 block">Visual Asset Pending (API Error)</span>
-                                                <p class="text-gray-800 font-mono text-sm leading-relaxed">${promptData.prompt}</p>
+                                        imgHtml = `
+                                            <div class="border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
+                                                <span class="text-xs font-bold text-indigo-600 uppercase mb-2 block">Visual Asset Pending</span>
+                                                <p class="text-gray-800 font-mono text-sm">${promptData.prompt}</p>
                                             </div>
                                         `;
-                                        sendEvent({ id: `img-prompt-${i}-${Date.now()}`, type: 'image', content: fallbackHtml });
+                                        fullGeneratedHtml += `${imgHtml}\n`; // Accumulate Fallback HTML
+                                        sendEvent({ id: `img-prompt-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                     }
                                 }
                             } catch (promptError) {
@@ -371,12 +375,27 @@ ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameC
                         }
                     }
 
-                    // 11. Finalize Transaction
-                    await BillingGuard.deductCredits(userId, ARTICLE_COST, "GENERATION");
+                    // 8. Commit Job Persistence (Success)
+                    await prisma.contentJob.update({
+                        where: { id: currentJobId! },
+                        data: {
+                            status: "COMPLETED",
+                            outputContent: fullGeneratedHtml
+                        }
+                    });
+
                     closeStream();
 
                 } catch (streamError) {
                     console.error("[STREAM_EXECUTION_FAULT]:", streamError);
+                    
+                    // Trigger Failure State internally
+                    if (currentJobId) {
+                        await prisma.contentJob.update({
+                            where: { id: currentJobId },
+                            data: { status: "FAILED" }
+                        });
+                    }
                     closeStream(); 
                 }
             }
@@ -392,8 +411,36 @@ ${brandNameContext ? `3. Subtly align the aesthetic with the brand: ${brandNameC
 
     } catch (error: any) {
         console.error("[PIPELINE_CRITICAL_FAILURE]:", error);
+
+        // 9. Trigger Atomic Rollback on Fatal Pipeline Error
+        if (areCreditsDeducted && currentJobId) {
+            console.log("[BILLING_ROLLBACK]: Refunding user due to critical fault.");
+            try {
+                // Direct DB manipulation used as fallback if BillingGuard lacks a native refund method
+                await prisma.transaction.create({
+                    data: {
+                        userId: currentUserId,
+                        amount: ARTICLE_COST,
+                        type: "REFUND",
+                        description: `System Fault Refund for Job: ${currentJobId}`
+                    }
+                });
+                await prisma.wallet.update({
+                    where: { userId: currentUserId },
+                    data: { creditsAvailable: { increment: ARTICLE_COST } }
+                });
+                
+                await prisma.contentJob.update({
+                    where: { id: currentJobId },
+                    data: { status: "FAILED" }
+                });
+            } catch (rollbackError) {
+                console.error("[CRITICAL_ROLLBACK_FAILURE]: Manual intervention required.", rollbackError);
+            }
+        }
+
         return new Response(
-            JSON.stringify({ message: error.message || "A critical error occurred." }), 
+            JSON.stringify({ message: error.message || "A critical error occurred during initialization." }), 
             { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
     }
