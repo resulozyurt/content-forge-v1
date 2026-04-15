@@ -46,25 +46,18 @@ export async function POST(req: NextRequest) {
 
     try {
         const session = await getServerSession(authOptions);
-        if (!session?.user?.id) {
-            return new Response(JSON.stringify({ message: "Unauthorized access." }), { status: 401 });
-        }
-
-        currentUserId = (session.user as any).id;
+        if (!session?.user?.id) return new Response(JSON.stringify({ message: "Unauthorized access." }), { status: 401 });
         
+        currentUserId = (session.user as any).id;
         const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
         const limiter = await rateLimit(`gen_article_${currentUserId}_${ip}`, 10, 60 * 60 * 1000);
 
-        if (!limiter.success) {
-            return new Response(JSON.stringify({ message: "Generation quota reached." }), { status: 429 });
-        }
+        if (!limiter.success) return new Response(JSON.stringify({ message: "Generation quota reached." }), { status: 429 });
 
         const rawBody = await req.json();
         const parseResult = generationPayloadSchema.safeParse(rawBody);
 
-        if (!parseResult.success) {
-            return new Response(JSON.stringify({ message: "Invalid payload.", errors: parseResult.error.format() }), { status: 400 });
-        }
+        if (!parseResult.success) return new Response(JSON.stringify({ message: "Invalid payload." }), { status: 400 });
 
         const { outlineData, config } = parseResult.data;
 
@@ -91,7 +84,6 @@ export async function POST(req: NextRequest) {
         const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
 
         let brandContext = "";
-        
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
@@ -109,14 +101,13 @@ export async function POST(req: NextRequest) {
                     const chunk = `data: ${JSON.stringify(data)}\n\n`;
                     controller.enqueue(encoder.encode(chunk));
                 };
-
                 const closeStream = () => {
                     controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                     controller.close();
                 };
 
                 try {
-                    // --- GLOBAL LINK STATE INITIALIZATION ---
+                    // --- LINK POOL INITIALIZATION ---
                     let availableInternalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
@@ -134,7 +125,6 @@ export async function POST(req: NextRequest) {
                             }
                         } catch (e) {}
                     }
-
                     let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])]; 
                     
                     let h2Counter = 0;
@@ -149,38 +139,39 @@ export async function POST(req: NextRequest) {
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        // Link Assignment Logic (Prevents Spam)
+                        // Anti-Spam Link Assignment
                         let externalLinksContext = "Do NOT add any external links in this section.";
                         if (availableExternalLinks.length > 0 && i % 2 !== 0) {
                             const linkToUse = availableExternalLinks.pop();
-                            externalLinksContext = `EXTERNAL LINK RULE: You MUST organically insert this exact external link: <a href="${linkToUse}" target="_blank" rel="noopener noreferrer">${linkToUse}</a>.`;
+                            externalLinksContext = `EXTERNAL LINK RULE: You MUST organically insert this exact external link once: <a href="${linkToUse}" target="_blank" rel="noopener noreferrer">${linkToUse}</a>.`;
                         }
 
                         let internalLinksContext = "Do NOT add any internal links in this section.";
                         if (availableInternalLinks.length > 0 && i % 2 === 0) {
                             const linkToUse = availableInternalLinks.pop();
-                            internalLinksContext = `INTERNAL LINK RULE: You MUST organically insert this exact internal link: <a href="${linkToUse}">${linkToUse}</a>.`;
+                            internalLinksContext = `INTERNAL LINK RULE: You MUST organically insert this exact internal link once: <a href="${linkToUse}">${linkToUse}</a>.`;
                         }
 
-                        // THE NEW REVOLUTIONARY SEO & READABILITY PROMPT
+                        // NEW AGGRESSIVE FORMATTING & STRICT HEADING PROMPT
                         const systemPrompt = `You are an elite Senior SEO Content Architect.
-Task: Write a highly readable, engaging, and structured section for the given heading.
+Task: Write a highly readable, engaging, and structured HTML section for the EXACT heading provided.
 
-CRITICAL READABILITY & FORMATTING RULES:
-1. NO WALLS OF TEXT: Keep paragraphs short (maximum 3-4 sentences).
-2. RICH HTML STRUCTURE: You MUST use HTML elements to break up the text. Depending on the context, include at least one of the following in your response:
-   - An unordered <ul> or ordered <ol> list to summarize key points.
-   - An HTML <table> to compare data or features.
-   - A checklist using <ul> with engaging formatting.
-3. EMPHASIS: Bold (<strong>) important SEO entities and key takeaways to improve scannability.
-4. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Depth: ${config.depth}.
-5. LENGTH: Write approximately ${wordsPerSection} words. NEVER truncate.
-6. ${externalLinksContext}
-7. ${internalLinksContext}${brandContext}`;
+CRITICAL RULES:
+1. DO NOT REWRITE THE HEADING. The user has provided the exact heading they want. You are only generating the body content below it.
+2. NO WALLS OF TEXT: Keep paragraphs extremely short (maximum 2 to 3 sentences per paragraph).
+3. RICH HTML STRUCTURE IS MANDATORY: You MUST include at least one of the following in your output:
+   - A detailed Unordered List (<ul>) or Ordered List (<ol>).
+   - An HTML Table (<table>) comparing features, pros/cons, or data.
+   - A formatting Checklist.
+4. EMPHASIS: Bold (<strong>) important SEO entities and key takeaways to improve scannability.
+5. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}.
+6. LENGTH: Write approximately ${wordsPerSection} words. NEVER truncate.
+7. ${externalLinksContext}
+8. ${internalLinksContext}${brandContext}`;
 
-                        const userMessage = `Original Heading: "${heading.text}"\nTarget NLP Keyword to incorporate naturally: "${targetKeyword}"`;
+                        const userMessage = `Write the content body for the heading: "${heading.text}"\nTarget NLP Keyword to incorporate naturally: "${targetKeyword}"`;
                         
-                        let finalHeadingText = heading.text;
+                        let finalHeadingText = heading.text; // STRCIT ENFORCEMENT OF ORIGINAL HEADING
                         let generatedText = "";
 
                         try {
@@ -192,26 +183,24 @@ CRITICAL READABILITY & FORMATTING RULES:
                                     messages: [{ role: "user", content: userMessage }],
                                     tools: [
                                         {
-                                            name: "generate_section",
-                                            description: "Generates highly formatted HTML content and a refined heading.",
+                                            name: "generate_html_body",
+                                            description: "Generates the highly formatted HTML content for the section. Do NOT output the heading tag itself.",
                                             input_schema: {
                                                 type: "object",
                                                 properties: {
-                                                    rewrittenHeading: { type: "string" },
-                                                    htmlContent: { type: "string" }
+                                                    htmlContent: { type: "string", description: "The highly formatted HTML content (paragraphs, lists, tables)." }
                                                 },
-                                                required: ["rewrittenHeading", "htmlContent"]
+                                                required: ["htmlContent"]
                                             }
                                         }
                                     ],
-                                    tool_choice: { type: "tool", name: "generate_section" },
+                                    tool_choice: { type: "tool", name: "generate_html_body" },
                                     temperature: 0.7,
                                 });
                                 
                                 const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                                 if (toolUseBlock) {
                                     const parsedData: any = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
-                                    finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                     generatedText = parsedData.htmlContent || "";
                                 }
                             } else {
@@ -219,13 +208,12 @@ CRITICAL READABILITY & FORMATTING RULES:
                                     model: "gpt-4o",
                                     response_format: { type: "json_object" },
                                     messages: [
-                                        { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object: { "rewrittenHeading": "...", "htmlContent": "..." }` },
+                                        { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object: { "htmlContent": "..." }` },
                                         { role: "user", content: userMessage }
                                     ],
                                     temperature: 0.7,
                                 });
                                 const parsedData = JSON.parse(textCompletion.choices[0].message.content || "{}");
-                                finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                 generatedText = parsedData.htmlContent || "";
                             }
                         } catch (parseError) {
@@ -238,21 +226,21 @@ CRITICAL READABILITY & FORMATTING RULES:
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        // IMAGE GENERATION FALLBACK & LOGIC
+                        // STABLE IMAGE GENERATION WITH POLLINATIONS.AI (No API Key Required Fallback)
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
-                                    max_tokens: 1000,
-                                    system: `Create a visual prompt in English and SEO fields in ${config.language}. Style: ULTRA-REALISTIC, NO text.`,
+                                    max_tokens: 500,
+                                    system: `Create a visual prompt in English. Style: ULTRA-REALISTIC, NO text.`,
                                     messages: [{ role: "user", content: `Create visual metadata for: "${finalHeadingText}".` }],
                                     tools: [{
                                         name: "generate_image_metadata",
                                         description: "Provides metadata for image generation.",
                                         input_schema: {
                                             type: "object",
-                                            properties: { prompt: { type: "string" }, alt: { type: "string" }, title: { type: "string" }, caption: { type: "string" } },
-                                            required: ["prompt", "alt", "title", "caption"]
+                                            properties: { prompt: { type: "string" }, alt: { type: "string" }, caption: { type: "string" } },
+                                            required: ["prompt", "alt", "caption"]
                                         }
                                     }],
                                     tool_choice: { type: "tool", name: "generate_image_metadata" },
@@ -263,34 +251,16 @@ CRITICAL READABILITY & FORMATTING RULES:
                                 const promptData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
 
                                 if (promptData.prompt) {
-                                    const geminiApiKey = process.env.GEMINI_API_KEY;
-                                    let b64Image = "";
-                                    let imgHtml = "";
+                                    // Bulletproof AI Image Generation using Pollinations (Direct URL)
+                                    const encodedPrompt = encodeURIComponent(promptData.prompt + " ultra realistic 8k photography, clean layout, highly detailed, no text");
+                                    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=800&height=450&nologo=true`;
 
-                                    if (geminiApiKey) {
-                                        try {
-                                            const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`, {
-                                                method: 'POST',
-                                                headers: { 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ contents: [{ parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, NO text" }] }] })
-                                            });
-
-                                            if (geminiRes.ok) {
-                                                const geminiData = await geminiRes.json();
-                                                b64Image = geminiData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "";
-                                            } else {
-                                                console.error("[GEMINI_API_ERROR]", await geminiRes.text());
-                                            }
-                                        } catch (e) {
-                                            console.error("[GEMINI_NETWORK_ERROR]", e);
-                                        }
-                                    }
-
-                                    if (b64Image) {
-                                        imgHtml = `<figure class="my-8"><img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption></figure>`;
-                                    } else {
-                                        imgHtml = `<div class="border-l-4 border-indigo-500 bg-indigo-50 p-4 my-6"><span class="text-xs font-bold text-indigo-600 block">Visual Prompt Generated (API Offline)</span><p class="text-sm">${promptData.prompt}</p></div>`;
-                                    }
+                                    const imgHtml = `
+                                        <figure class="my-8">
+                                            <img src="${imageUrl}" alt="${promptData.alt}" class="w-full rounded-xl shadow-lg border border-gray-200" />
+                                            <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
+                                        </figure>
+                                    `;
                                     fullGeneratedHtml += `${imgHtml}\n`; 
                                     sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                 }
