@@ -50,13 +50,13 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                     const formattedData: any = {
                         intent: apiData.intent || "Informational",
                         keywords: apiData.keywords || [],
-                        competitors: (apiData.competitors || []).map((c: any) => ({
-                            id: c.id,
-                            url: c.url,
-                            title: c.title,
-                            wordCount: c.wordCount,
-                            selected: true, // Default to true so users can manually exclude them
-                            headings: c.headings
+                        competitors: (apiData.competitors || []).map((c: any, i: number) => ({
+                            id: `comp_${i}_${Date.now()}`, // Frontend kendisi benzersiz ID üretiyor
+                            url: c.url || "unknown",
+                            title: c.title || "Untitled",
+                            wordCount: c.wordCount || 0,
+                            selected: true,
+                            headings: c.headings || []
                         })),
                         questions: apiData.questions || [],
                         gaps: apiData.gaps || []
