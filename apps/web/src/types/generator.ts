@@ -22,7 +22,7 @@ export const initialConfigData: GeneratorConfigData = {
   query: '',
   contentType: 'blog_post',
   language: 'en',
-  model: 'claude-3-5-sonnet',
+  model: 'claude-sonnet-4-6',
   depth: 'comprehensive',
   tone: 'professional',
   targetAudience: '',
