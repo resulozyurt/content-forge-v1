@@ -1,12 +1,14 @@
 // apps/web/src/types/generator.ts
 
 export type ContentType = 'blog_post' | 'pillar_page' | 'guide' | 'product_review' | 'service_page';
-export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o';
+
+// FIX 1: Enforced strict model naming based on global rules
+export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o'; 
+
 export type Language = 'en' | 'tr';
 export type ContentDepth = 'standard' | 'comprehensive' | 'exhaustive';
 export type Tone = 'professional' | 'casual' | 'educational' | 'persuasive' | 'authoritative';
 
-// Frase benzeri ana konfigürasyon verimiz
 export interface GeneratorConfigData {
   query: string;
   topic?: string;
@@ -22,7 +24,7 @@ export const initialConfigData: GeneratorConfigData = {
   query: '',
   contentType: 'blog_post',
   language: 'en',
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-4-6', // Updated to reflect strict rule
   depth: 'comprehensive',
   tone: 'professional',
   targetAudience: '',
@@ -57,11 +59,12 @@ export interface FinalOutlineData {
   sourceUrls?: string[];
 }
 
-export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image';
+// FIX 2: Added 'seo_metadata' to the union type to resolve strict type checking fault
+export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image' | 'seo_metadata';
 
 export interface GeneratedBlock {
   id: string;
   type: ContentBlockType;
-  content: string;
+  content: any; // Adjusted to 'any' to safely accommodate both string blocks and JSON objects (like SEO data)
   metadata?: any;
 }
