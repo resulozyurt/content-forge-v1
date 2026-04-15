@@ -6,50 +6,53 @@ import { prisma } from "@contentforge/database";
 
 export async function POST(req: Request) {
     try {
-        // 1. Authenticate the session
         const session = await getServerSession(authOptions);
         if (!session?.user?.id) {
             return NextResponse.json({ message: "Unauthorized access." }, { status: 401 });
         }
 
-        const { title, content, aiModel, inputData } = await req.json();
+        const { title, content, aiModel, inputData, seoMetadata } = await req.json();
         
         if (!content) {
             return NextResponse.json({ message: "Document content is required." }, { status: 400 });
         }
 
-        // 2. Ensure the foundational tool reference exists in the registry
         const tool = await prisma.tool.upsert({
             where: { slug: "seo-writer" },
             update: {},
             create: { slug: "seo-writer", name: "SEO Article Writer", isActive: true }
         });
 
-        // 3. Sterilize the payload to prevent Prisma JSON serialization faults
         const safePayload = inputData ? JSON.parse(JSON.stringify(inputData)) : {};
         safePayload.title = title || "Generated SEO Article";
 
-        // GÜVENLİK FİLTRESİ: Gelen model şemadaki Enum'lardan biri değilse, sistem çökmesin diye CLAUDE'u varsayılan olarak ata.
-        const validAiModel = (aiModel === "claude-sonnet-4-6" || aiModel === "GPT_4_OMNI") ? aiModel : "claude-sonnet-4-6";
+        // CRITICAL FIX: Ensure the string perfectly matches the Prisma Enum 'AIModel'
+        // This prevents the "Invalid prisma.contentJob.create() invocation" crash.
+        let validAiModel: "CLAUDE_3_5_SONNET" | "GPT_4_OMNI" = "CLAUDE_3_5_SONNET";
+        if (typeof aiModel === 'string') {
+            const rawModel = aiModel.toUpperCase();
+            if (rawModel.includes("GPT") || rawModel.includes("OMNI")) {
+                validAiModel = "GPT_4_OMNI";
+            }
+        }
 
-        // 4. Persist the generated document to the ledger
         const savedDocument = await prisma.contentJob.create({
             data: {
                 userId: (session.user as any).id,
                 toolId: tool.id,
-                aiModel: validAiModel,
+                aiModel: validAiModel, 
                 status: "COMPLETED",
                 inputPayload: safePayload, 
                 outputContent: content,
+                seoMetadata: seoMetadata || undefined
             }
         });
 
-        console.log(`[LEDGER_SYNC] Successfully persisted document ${savedDocument.id} for user ${(session.user as any).id}`);
+        console.log(`[LEDGER_SYNC] Successfully persisted document ${savedDocument.id}`);
         return NextResponse.json({ message: "Document saved successfully", documentId: savedDocument.id }, { status: 200 });
 
     } catch (error: any) {
         console.error("[DOCUMENT_SAVE_CRITICAL_ERROR]:", error);
-        // Return the exact error signature to the client to prevent silent failures
         return NextResponse.json({ message: "Failed to save document to the cluster.", details: error.message }, { status: 500 });
     }
 }

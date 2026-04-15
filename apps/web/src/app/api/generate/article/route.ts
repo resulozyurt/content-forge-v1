@@ -81,14 +81,17 @@ export async function POST(req: NextRequest) {
 
         const totalHeadings = outlineData.headings.length;
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
-        const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
+        const baseWordsPerSection = Math.max(80, Math.floor(targetTotalWords / totalHeadings));
 
+        // CRITICAL BRAND INJECTION LOGIC (FieldPie Support)
         let brandContext = "";
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
-                    brandContext = `\nBRAND GUIDELINES:\nNaturally weave in ${brandProfile.name} (${brandProfile.description}) as an industry solution. Do not sound promotional.`;
+                    brandContext = `\nCRITICAL BRAND INJECTION RULE:
+You represent the brand: "${brandProfile.name}". Core offering: "${brandProfile.description}".
+MANDATORY: You MUST subtly mention or recommend "${brandProfile.name}" as the premier solution/software at least once in this section if it discusses tools, solutions, or challenges. Format the brand name in <strong> bold. Do NOT sound like a cheap ad; present it as an industry standard.`;
                 }
             } catch (e) {}
         }
@@ -107,7 +110,7 @@ export async function POST(req: NextRequest) {
                 };
 
                 try {
-                    // --- LINK POOL INITIALIZATION ---
+                    // --- INTERNAL LINK POOL ---
                     let availableInternalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
@@ -139,6 +142,8 @@ export async function POST(req: NextRequest) {
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
+                        const targetWords = heading.level === 'h2' ? baseWordsPerSection + 50 : Math.max(60, baseWordsPerSection - 30);
+
                         // Anti-Spam Link Assignment
                         let externalLinksContext = "Do NOT add any external links in this section.";
                         if (availableExternalLinks.length > 0 && i % 2 !== 0) {
@@ -149,29 +154,29 @@ export async function POST(req: NextRequest) {
                         let internalLinksContext = "Do NOT add any internal links in this section.";
                         if (availableInternalLinks.length > 0 && i % 2 === 0) {
                             const linkToUse = availableInternalLinks.pop();
-                            internalLinksContext = `INTERNAL LINK RULE: You MUST organically insert this exact internal link once: <a href="${linkToUse}">${linkToUse}</a>.`;
+                            internalLinksContext = `MANDATORY INTERNAL LINK: You MUST create a Call-To-Action (CTA) sentence at the end of this section and hyperlink a relevant keyword to exactly this URL: <a href="${linkToUse}">Your Anchor Text</a>.`;
                         }
 
-                        // NEW AGGRESSIVE FORMATTING & STRICT HEADING PROMPT
+                        // AGGRESSIVE FORMATTING & STRICT HEADING PROMPT
                         const systemPrompt = `You are an elite Senior SEO Content Architect.
 Task: Write a highly readable, engaging, and structured HTML section for the EXACT heading provided.
 
-CRITICAL RULES:
+ABSOLUTE MANDATORY FORMATTING RULES (FAILURE TO OBEY WILL BREAK THE SYSTEM):
 1. DO NOT REWRITE THE HEADING. The user has provided the exact heading they want. You are only generating the body content below it.
-2. NO WALLS OF TEXT: Keep paragraphs extremely short (maximum 2 to 3 sentences per paragraph).
-3. RICH HTML STRUCTURE IS MANDATORY: You MUST include at least one of the following in your output:
-   - A detailed Unordered List (<ul>) or Ordered List (<ol>).
-   - An HTML Table (<table>) comparing features, pros/cons, or data.
-   - A formatting Checklist.
+2. NO WALLS OF TEXT: It is STRICTLY FORBIDDEN to write more than 3 consecutive <p> paragraphs. 
+3. YOU MUST BREAK UP THE TEXT USING AT LEAST ONE OF THESE RICH ELEMENTS IN EVERY SECTION:
+   - A detailed HTML <table> (if comparing data, pros/cons, or features).
+   - An engaging <ul> or <ol> list (use for checklists, steps, or key takeaways).
+   - An expert quote using <blockquote> tags.
 4. EMPHASIS: Bold (<strong>) important SEO entities and key takeaways to improve scannability.
 5. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}.
-6. LENGTH: Write approximately ${wordsPerSection} words. NEVER truncate.
+6. LENGTH: Write approximately ${targetWords} words. NEVER truncate.
 7. ${externalLinksContext}
 8. ${internalLinksContext}${brandContext}`;
 
-                        const userMessage = `Write the content body for the heading: "${heading.text}"\nTarget NLP Keyword to incorporate naturally: "${targetKeyword}"`;
+                        const userMessage = `Write the highly formatted HTML content body for the heading: "${heading.text}"\nTarget NLP Keyword to incorporate naturally: "${targetKeyword}"`;
                         
-                        let finalHeadingText = heading.text; // STRCIT ENFORCEMENT OF ORIGINAL HEADING
+                        let finalHeadingText = heading.text; 
                         let generatedText = "";
 
                         try {
@@ -226,14 +231,14 @@ CRITICAL RULES:
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        // STABLE IMAGE GENERATION WITH POLLINATIONS.AI (No API Key Required Fallback)
+                        // STABLE IMAGE GENERATION WITH POLLINATIONS.AI (No API Key Required)
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
                                     max_tokens: 500,
                                     system: `Create a visual prompt in English. Style: ULTRA-REALISTIC, NO text.`,
-                                    messages: [{ role: "user", content: `Create visual metadata for: "${finalHeadingText}".` }],
+                                    messages: [{ role: "user", content: `Create visual metadata for: "${finalHeadingText}". Focus on human interaction if possible.` }],
                                     tools: [{
                                         name: "generate_image_metadata",
                                         description: "Provides metadata for image generation.",
@@ -251,7 +256,6 @@ CRITICAL RULES:
                                 const promptData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
 
                                 if (promptData.prompt) {
-                                    // Bulletproof AI Image Generation using Pollinations (Direct URL)
                                     const encodedPrompt = encodeURIComponent(promptData.prompt + " ultra realistic 8k photography, clean layout, highly detailed, no text");
                                     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=800&height=450&nologo=true`;
 
