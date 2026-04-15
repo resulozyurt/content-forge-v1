@@ -9,6 +9,7 @@ export type Tone = 'professional' | 'casual' | 'educational' | 'persuasive' | 'a
 // Frase benzeri ana konfigürasyon verimiz
 export interface GeneratorConfigData {
   query: string;
+  topic?: string;
   contentType: ContentType;
   language: Language;
   model: AIModel;
@@ -33,6 +34,7 @@ export interface CompetitorData {
   title: string;
   wordCount: number;
   selected: boolean;
+  headings?: { level: string; text: string }[];
 }
 
 export interface ResearchResultData {
@@ -51,6 +53,7 @@ export interface OutlineHeading {
 export interface FinalOutlineData {
   headings: OutlineHeading[];
   selectedKeywords: string[];
+  sourceUrls?: string[];
 }
 
 export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image';

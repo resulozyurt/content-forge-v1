@@ -173,7 +173,7 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             : [];
 
         const finalData: FinalOutlineData = {
-            headings: myOutline.map(h => ({ level: h.level, text: h.text })),
+            headings: myOutline.map(h => ({ id: h.id, level: h.level, text: h.text })),
             selectedKeywords: selectedKeywords,
             sourceUrls: competitorUrls,
         };
