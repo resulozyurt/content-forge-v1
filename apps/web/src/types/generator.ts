@@ -1,7 +1,7 @@
 // apps/web/src/types/generator.ts
 
 export type ContentType = 'blog_post' | 'pillar_page' | 'guide' | 'product_review' | 'service_page';
-export type AIModel = 'claude-3-5-sonnet' | 'gpt-4o';
+export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o';
 export type Language = 'en' | 'tr';
 export type ContentDepth = 'standard' | 'comprehensive' | 'exhaustive';
 export type Tone = 'professional' | 'casual' | 'educational' | 'persuasive' | 'authoritative';
