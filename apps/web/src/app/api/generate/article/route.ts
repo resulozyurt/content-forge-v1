@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
             data: {
                 userId: currentUserId,
                 toolId: activeTool.id,
-                aiModel: config.engine.toLowerCase().includes("claude") ? "claude-sonnet-4-6" : "GPT_4_OMNI",
+                aiModel: config.engine.toLowerCase().includes("claude") ? "CLAUDE_3_5_SONNET" : "GPT_4_OMNI",
                 status: "PROCESSING",
                 inputPayload: rawBody,
             }
