@@ -8,12 +8,11 @@ import { headers } from "next/headers";
 import Anthropic from "@anthropic-ai/sdk";
 import * as cheerio from "cheerio";
 
-// Initialize the Anthropic SDK to leverage Claude 3.5 Sonnet's deep context window
+// Initialize the Anthropic SDK to leverage Claude's deep context window
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY || "",
 });
 
-// Extend execution timeout to accommodate deep scraping and Claude's complex reasoning
 export const maxDuration = 300; 
 
 export interface ScrapedData {
@@ -22,13 +21,9 @@ export interface ScrapedData {
   title: string;
   wordCount: number;
   headings: { level: string; text: string }[];
-  bodyText: string; // Crucial addition: Storing raw text for Claude's semantic TF-IDF simulation
+  bodyText: string; 
 }
 
-/**
- * Advanced fetch wrapper utilizing ScraperAPI to bypass Cloudflare, Datadome, and JS-rendering walls.
- * If SCRAPER_API_KEY is not defined, it gracefully falls back to a standard fetch with rotated headers.
- */
 const fetchWithScrapingInfrastructure = async (url: string, signal: AbortSignal): Promise<string | null> => {
   try {
     const scraperApiKey = process.env.SCRAPER_API_KEY;
@@ -68,23 +63,17 @@ export async function POST(req: Request) {
 
     const userId = (session.user as any).id;
     
-    // Rate Limiting: 20 research operations per hour per user
     const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
     const limiter = await rateLimit(`research_${userId}_${ip}`, 20, 60 * 60 * 1000); 
 
     if (!limiter.success) {
         return NextResponse.json(
             { error: "Research quota exceeded. Please wait before starting new research." }, 
-            { 
-                status: 429, 
-                headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
-            }
+            { status: 429, headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) }
         );
     }
 
     const RESEARCH_COST = 1;
-
-    // 2. Billing Guard Assessment
     await BillingGuard.checkCredits(userId, RESEARCH_COST);
 
     const { topic, config } = await req.json();
@@ -100,18 +89,17 @@ export async function POST(req: Request) {
     }
 
     const language = config?.language || "English (US)";
-    const contentDepth = config?.depth || "Comprehensive";
     
     console.log(`[PIPELINE_INIT] Fetching live SERP data for primary keyword: "${topic}"...`);
 
-    // 3. Procure Google SERP Data (Fetch top 15 to maintain a standby buffer)
+    // 3. Procure Google SERP Data (Fetch top 30 to establish a filtering buffer)
     const serperResponse = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: {
         "X-API-KEY": serperApiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ q: topic, num: 15 }), 
+      body: JSON.stringify({ q: topic, num: 30 }), 
     });
 
     if (!serperResponse.ok) throw new Error("Failed to retrieve data from the primary search provider.");
@@ -121,13 +109,34 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No organic search results found for the specified query." }, { status: 404 });
     }
 
-    const topUrls = serperData.organic.map((res: any) => res.link).slice(0, 15);
-    console.log(`[SCRAPE_INIT] Identified ${topUrls.length} target URLs. Initializing concurrent workers...`);
+    // 4. Strict Domain Filtering Architecture (Remove Non-Blog/Junk Targets)
+    const JUNK_DOMAINS = [
+      "youtube.com", "youtu.be", "pinterest.com", "reddit.com", "quora.com",
+      "g2.com", "capterra.com", "trustpilot.com", "softwareadvice.com", "getapp.com",
+      "amazon.", "ebay.", "etsy.com", "walmart.com", 
+      "facebook.com", "twitter.com", "instagram.com", "tiktok.com", "linkedin.com",
+      "wikipedia.org", "yelp.com", "tripadvisor.com"
+    ];
 
-    // 4. Concurrent Web Scraping with Fault Tolerance
-    const scrapePromises = topUrls.map(async (url: string, index: number) => {
+    const cleanUrls = serperData.organic
+      .map((res: any) => res.link)
+      .filter((url: string) => {
+        const lowerUrl = url.toLowerCase();
+        return !JUNK_DOMAINS.some(domain => lowerUrl.includes(domain));
+      });
+
+    // Select the top 12 high-quality blog/article URLs for scraping
+    const targetUrls = cleanUrls.slice(0, 12);
+    console.log(`[SCRAPE_INIT] Identified ${targetUrls.length} high-quality target URLs. Initializing concurrent workers...`);
+
+    if (targetUrls.length === 0) {
+        return NextResponse.json({ error: "Search results only contained blacklisted directory or social media sites. Please refine the query." }, { status: 422 });
+    }
+
+    // 5. Concurrent Web Scraping with Fault Tolerance
+    const scrapePromises = targetUrls.map(async (url: string, index: number) => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second hard timeout
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10-second hard timeout
 
       const html = await fetchWithScrapingInfrastructure(url, controller.signal);
       clearTimeout(timeoutId);
@@ -137,13 +146,13 @@ export async function POST(req: Request) {
       try {
         const $ = cheerio.load(html);
 
-        // Aggressive DOM sanitization to reduce noise
-        $("script, style, noscript, iframe, img, svg, nav, footer, header, aside, .sidebar, .comments, .advertisement").remove();
+        // Aggressive DOM sanitization to isolate core article content
+        $("script, style, noscript, iframe, img, svg, nav, footer, header, aside, .sidebar, .comments, .advertisement, form, button").remove();
         
         const textContent = $("body").text().replace(/\s+/g, " ").trim();
         const wordCount = textContent.split(" ").length;
 
-        if (wordCount < 150) return null;
+        if (wordCount < 200) return null; // Skip low-value "thin content" pages
 
         const headings: { level: string; text: string }[] = [];
         $("h1, h2, h3").each((_, el) => {
@@ -161,7 +170,7 @@ export async function POST(req: Request) {
           title: pageTitle.substring(0, 70),
           wordCount,
           headings: headings.slice(0, 25),
-          bodyText: textContent.substring(0, 4000) // Provide 4K chars of pure context per competitor to Claude
+          bodyText: textContent.substring(0, 4000) 
         } as ScrapedData;
 
       } catch (parseError) {
@@ -177,22 +186,22 @@ export async function POST(req: Request) {
 
     if (validScrapedResults.length === 0) {
       return NextResponse.json({ 
-        error: "Unable to parse competitor content. Targets may be protected by anti-bot measures." 
+        error: "Unable to parse competitor content. Targets may be protected by aggressive anti-bot measures." 
       }, { status: 422 });
     }
 
-    console.log(`[NLP_ROUTING] Successfully extracted data for ${validScrapedResults.length} competitors. Executing Claude 3.5 Sonnet Tool Use...`);
+    console.log(`[NLP_ROUTING] Successfully extracted data for ${validScrapedResults.length} elite competitors. Executing Claude Tool Use...`);
 
-    // 5. Constructing the Context payload for Claude
-    const competitorContext = validScrapedResults.slice(0, 10).map(c => 
+    // 6. Constructing the Context payload (Limit to Top 8 for optimal context window efficiency)
+    const competitorContext = validScrapedResults.slice(0, 8).map(c => 
       `--- Competitor: ${c.title} ---\nHeadings: ${c.headings.map(h => h.text).join(", ")}\nContent Snippet: ${c.bodyText}`
     ).join("\n\n");
 
-    // 6. CLAUDE 3.5 SONNET - Tool Use Execution for strict schema adherence
+    // 7. CLAUDE - Tool Use Execution for strict schema adherence
     const anthropicResponse = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
-      temperature: 0.2, // Low temperature for highly analytical and structured output
+      temperature: 0.2, 
       system: `You are an elite SEO Strategist and Data Scientist. Your task is to analyze raw competitor content and extract semantic insights mimicking a mathematical TF-IDF NLP model. Target output language: ${language}.`,
       messages: [
         {
@@ -246,14 +255,13 @@ export async function POST(req: Request) {
       tool_choice: { type: "tool", name: "generate_research_report" }
     });
 
-    // 7. Extract the Tool Use payload from Claude's response
     const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
     
     if (!toolUseBlock) {
       throw new Error("Claude failed to execute the required JSON structuring tool.");
     }
 
-    const reportData = toolUseBlock.input as any;
+    const reportData = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input as any;
 
     // 8. Assemble the final unified payload
     const researchData = {
@@ -269,7 +277,7 @@ export async function POST(req: Request) {
     
     // 9. Finalize Transaction & Deduct Credits
     await BillingGuard.deductCredits(userId, RESEARCH_COST, "RESEARCH");
-    console.log(`[SUCCESS] Claude 3.5 Sonnet pipeline finalized. Deducted ${RESEARCH_COST} credit(s).`);
+    console.log(`[SUCCESS] Claude pipeline finalized. Deducted ${RESEARCH_COST} credit(s).`);
 
     return NextResponse.json({ data: researchData }, { status: 200 });
 
