@@ -46,7 +46,6 @@ export async function POST(req: NextRequest) {
     let currentUserId = "";
 
     try {
-        // 1. Authentication & Session Validation
         const session = await getServerSession(authOptions);
         if (!session?.user?.id) {
             return new Response(
@@ -57,44 +56,30 @@ export async function POST(req: NextRequest) {
 
         currentUserId = (session.user as any).id;
         
-        // 2. Rate Limiting Execution
         const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
         const limiter = await rateLimit(`gen_article_${currentUserId}_${ip}`, 10, 60 * 60 * 1000);
 
         if (!limiter.success) {
             return new Response(
                 JSON.stringify({ message: "Generation quota reached. Please check back later." }), 
-                { 
-                    status: 429, 
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset)
-                    } 
-                }
+                { status: 429, headers: { 'Content-Type': 'application/json', ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) } }
             );
         }
 
-        // 3. Payload Validation
         const rawBody = await req.json();
         const parseResult = generationPayloadSchema.safeParse(rawBody);
 
         if (!parseResult.success) {
             return new Response(
-                JSON.stringify({ 
-                    message: "Invalid payload provided.", 
-                    errors: parseResult.error.format() 
-                }), 
+                JSON.stringify({ message: "Invalid payload provided.", errors: parseResult.error.format() }), 
                 { status: 400, headers: { 'Content-Type': 'application/json' } }
             );
         }
 
         const { outlineData, config } = parseResult.data;
 
-        // 4. Persistence Init: Retrieve tool context and create a pending Job record
         const activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
-        if (!activeTool) {
-            throw new Error("System Configuration Fault: No active AI tools found in the database.");
-        }
+        if (!activeTool) throw new Error("System Configuration Fault: No active AI tools found in the database.");
 
         const contentJob = await prisma.contentJob.create({
             data: {
@@ -107,12 +92,10 @@ export async function POST(req: NextRequest) {
         });
         currentJobId = contentJob.id;
 
-        // 5. Atomic Billing: Deduct credits BEFORE initializing the heavy stream
         await BillingGuard.checkCredits(currentUserId, ARTICLE_COST);
         await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
         areCreditsDeducted = true;
 
-        // 6. Context Preparation
         const totalHeadings = outlineData.headings.length;
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
         const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
@@ -129,7 +112,6 @@ export async function POST(req: NextRequest) {
 You MUST organically weave the following brand into the content.
 - Brand Name: ${brandProfile.name}
 - Core Offerings: ${brandProfile.description}
-${brandProfile.sitemapUrl ? `- Internal Link Guide: ${brandProfile.sitemapUrl}` : ''}
 CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
                 }
             } catch (brandError) {
@@ -137,7 +119,6 @@ CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
             }
         }
 
-        // 7. Stream Architecture Initialization
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream({
@@ -153,27 +134,37 @@ CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
                 };
 
                 try {
+                    // --- PHASE 3: ADVANCED RAG LINKER & SITEMAP INTEGRATION ---
                     let internalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
-                            const sitemapRes = await fetch(config.wpSitemap, { signal: AbortSignal.timeout(5000) });
+                            const sitemapRes = await fetch(config.wpSitemap, { signal: AbortSignal.timeout(8000) });
                             if (sitemapRes.ok) {
                                 const sitemapXml = await sitemapRes.text();
-                                const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g));
-                                internalLinks = matches.map(m => m[1]).filter(url => url.length > 10).slice(0, 20);
+                                const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]);
+                                
+                                const isTurkish = config.language.toLowerCase().includes('tr');
+                                let filteredLinks = matches.filter(url => {
+                                    if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
+                                    else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
+                                });
+
+                                if (filteredLinks.length === 0) filteredLinks = matches;
+
+                                // Shuffle and limit to 15 to provide dynamic variety across generations
+                                internalLinks = filteredLinks.sort(() => 0.5 - Math.random()).slice(0, 15);
                             }
                         } catch (e) {
                             console.warn("[SEO_PIPELINE_WARNING] Sitemap fetch timed out.");
                         }
                     }
 
-                    const sourceUrls = outlineData.sourceUrls;
-                    const externalLinksContext = sourceUrls.length > 0 
-                        ? `EXTERNAL LINK RULE: Organically insert ONE external link from: ${sourceUrls.join(', ')}.`
+                    const externalLinksContext = outlineData.sourceUrls.length > 0 
+                        ? `EXTERNAL LINK RULE: To build authority, you MAY insert MAX ONE external link from: [${outlineData.sourceUrls.join(', ')}]. ONLY use it if it contextually strengthens the factual claim. Format: <a href="[URL]" target="_blank" rel="noopener noreferrer">[Anchor Text]</a>.`
                         : `EXTERNAL LINK RULE: Do not add external links.`;
 
                     const internalLinksContext = internalLinks.length > 0
-                        ? `INTERNAL LINK RULE: Organically insert ONE internal link from: ${internalLinks.join(', ')}. Use format: <a href="[URL]">[Anchor Text]</a>.`
+                        ? `INTERNAL LINK RULE: You have access to these internal URLs: [${internalLinks.join(', ')}]. You MAY organically insert MAX ONE internal link IF it perfectly matches the paragraph's context. Do NOT force it. Format: <a href="[URL]">[Anchor Text]</a>.`
                         : `INTERNAL LINK RULE: Skip internal linking.`;
 
                     const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
@@ -189,9 +180,8 @@ STRICT RULES:
 7. ${internalLinksContext}${brandContext}`;
 
                     let h2Counter = 0;
-                    let fullGeneratedHtml = ""; // HTML Accumulator for database persistence
+                    let fullGeneratedHtml = ""; 
 
-                    // 7.1 Primary Generation Loop
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
@@ -254,31 +244,17 @@ STRICT RULES:
                                 finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                 generatedText = parsedData.htmlContent || "";
                             }
-
                         } catch (parseError) {
                             console.error("[PARSE_FAULT] Pipeline execution failed.", parseError);
                             generatedText = "<p>Content pipeline encountered a formatting fault.</p>";
                         }
 
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
-
-                        // Accumulate Core Text Content
                         fullGeneratedHtml += `<${heading.level}>${finalHeadingText}</${heading.level}>\n${generatedText}\n`;
 
-                        // Dispatch Text Blocks to Client
-                        sendEvent({
-                            id: `h-${i}-${Date.now()}`,
-                            type: heading.level,
-                            content: finalHeadingText,
-                        });
+                        sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
+                        sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        sendEvent({
-                            id: `p-${i}-${Date.now()}`,
-                            type: 'paragraph',
-                            content: generatedText,
-                        });
-
-                        // 7.2 Visual Asset Generation (Strictly every 3rd H2)
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
@@ -288,9 +264,7 @@ STRICT RULES:
 CRITICAL RULES:
 1. The 'prompt' MUST be in English. SEO fields must be in ${config.language}.
 2. Style: ULTRA-REALISTIC, DSLR photography, natural lighting. NO text.`,
-                                    messages: [
-                                        { role: "user", content: `Create visual metadata for section: "${finalHeadingText}".` }
-                                    ],
+                                    messages: [{ role: "user", content: `Create visual metadata for section: "${finalHeadingText}".` }],
                                     tools: [
                                         {
                                             name: "generate_image_metadata",
@@ -312,11 +286,7 @@ CRITICAL RULES:
                                 });
 
                                 const toolUseBlock = promptReq.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
-                                let promptData: any = {};
-                                
-                                if (toolUseBlock) {
-                                    promptData = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
-                                }
+                                const promptData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
 
                                 if (promptData.prompt) {
                                     const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -324,17 +294,10 @@ CRITICAL RULES:
                                     let imgHtml = "";
 
                                     if (geminiApiKey) {
-                                        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`;
-                                        const geminiPayload = {
-                                            contents: [{
-                                                parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }]
-                                            }]
-                                        };
-
-                                        const geminiRes = await fetch(geminiUrl, {
+                                        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`, {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify(geminiPayload)
+                                            body: JSON.stringify({ contents: [{ parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }] }] })
                                         });
 
                                         if (geminiRes.ok) {
@@ -350,24 +313,12 @@ CRITICAL RULES:
                                     }
 
                                     if (b64Image) {
-                                        imgHtml = `
-                                            <figure class="my-8">
-                                                <img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200" />
-                                                <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
-                                            </figure>
-                                        `;
-                                        fullGeneratedHtml += `${imgHtml}\n`; 
-                                        sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
+                                        imgHtml = `<figure class="my-8"><img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption></figure>`;
                                     } else {
-                                        imgHtml = `
-                                            <div class="border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg">
-                                                <span class="text-xs font-bold text-indigo-600 uppercase mb-2 block">Visual Asset Pending</span>
-                                                <p class="text-gray-800 font-mono text-sm">${promptData.prompt}</p>
-                                            </div>
-                                        `;
-                                        fullGeneratedHtml += `${imgHtml}\n`; 
-                                        sendEvent({ id: `img-prompt-${i}-${Date.now()}`, type: 'image', content: imgHtml });
+                                        imgHtml = `<div class="border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg"><span class="text-xs font-bold text-indigo-600 uppercase mb-2 block">Visual Asset Pending</span><p class="text-gray-800 font-mono text-sm">${promptData.prompt}</p></div>`;
                                     }
+                                    fullGeneratedHtml += `${imgHtml}\n`; 
+                                    sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                 }
                             } catch (promptError) {
                                 console.error("[IMAGE_GENERATION_FAULT]:", promptError);
@@ -375,7 +326,6 @@ CRITICAL RULES:
                         }
                     }
 
-                    // 7.3 POST-PROCESSING: Rank Math SEO Metadata Generation
                     let finalSeoMetadata = null;
                     try {
                         const seoSystemPrompt = `You are a Senior Technical SEO Architect.
@@ -386,7 +336,6 @@ RULES:
 3. Provide a 'metaTitle' (max 60 characters, highly clickable).
 4. Provide a 'metaDescription' (max 160 characters, strong CTA).`;
 
-                        // We slice the content to save tokens, the first 5000 chars are usually enough for context
                         const contentSample = fullGeneratedHtml.substring(0, 5000); 
 
                         const seoResponse = await anthropic.messages.create({
@@ -394,21 +343,15 @@ RULES:
                             max_tokens: 500,
                             system: seoSystemPrompt,
                             messages: [{ role: "user", content: `Analyze this content and generate SEO JSON:\n\n${contentSample}` }],
-                            tools: [
-                                {
-                                    name: "set_rank_math_metadata",
-                                    description: "Outputs strict Rank Math metadata.",
-                                    input_schema: {
-                                        type: "object",
-                                        properties: {
-                                            focusKeyword: { type: "string" },
-                                            metaTitle: { type: "string" },
-                                            metaDescription: { type: "string" }
-                                        },
-                                        required: ["focusKeyword", "metaTitle", "metaDescription"]
-                                    }
+                            tools: [{
+                                name: "set_rank_math_metadata",
+                                description: "Outputs strict Rank Math metadata.",
+                                input_schema: {
+                                    type: "object",
+                                    properties: { focusKeyword: { type: "string" }, metaTitle: { type: "string" }, metaDescription: { type: "string" } },
+                                    required: ["focusKeyword", "metaTitle", "metaDescription"]
                                 }
-                            ],
+                            }],
                             tool_choice: { type: "tool", name: "set_rank_math_metadata" },
                             temperature: 0.3,
                         });
@@ -416,20 +359,18 @@ RULES:
                         const seoBlock = seoResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                         if (seoBlock) {
                             finalSeoMetadata = typeof seoBlock.input === 'string' ? JSON.parse(seoBlock.input) : seoBlock.input;
-                            // Dispatch SEO data to frontend
                             sendEvent({ id: `seo-${Date.now()}`, type: 'seo_metadata', content: finalSeoMetadata });
                         }
                     } catch (seoError) {
                         console.error("[SEO_METADATA_GENERATION_FAULT]:", seoError);
                     }
 
-                    // 8. Commit Job Persistence (Success)
                     await prisma.contentJob.update({
                         where: { id: currentJobId! },
                         data: {
                             status: "COMPLETED",
                             outputContent: fullGeneratedHtml,
-                            seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined // NEW: Save to DB
+                            seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined
                         }
                     });
 
@@ -437,60 +378,22 @@ RULES:
 
                 } catch (streamError) {
                     console.error("[STREAM_EXECUTION_FAULT]:", streamError);
-                    
-                    // Trigger Failure State internally
-                    if (currentJobId) {
-                        await prisma.contentJob.update({
-                            where: { id: currentJobId },
-                            data: { status: "FAILED" }
-                        });
-                    }
+                    if (currentJobId) await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
                     closeStream(); 
                 }
             }
         });
 
-        return new Response(stream, {
-            headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache, no-transform',
-                'Connection': 'keep-alive',
-            },
-        });
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive' } });
 
     } catch (error: any) {
-        console.error("[PIPELINE_CRITICAL_FAILURE]:", error);
-
-        // 9. Trigger Atomic Rollback on Fatal Pipeline Error
         if (areCreditsDeducted && currentJobId) {
-            console.log("[BILLING_ROLLBACK]: Refunding user due to critical fault.");
             try {
-                // Direct DB manipulation used as fallback
-                await prisma.transaction.create({
-                    data: {
-                        userId: currentUserId,
-                        amount: ARTICLE_COST,
-                        type: "REFUND",
-                        description: `System Fault Refund for Job: ${currentJobId}`
-                    }
-                });
-                await prisma.wallet.update({
-                    where: { userId: currentUserId },
-                    data: { creditsAvailable: { increment: ARTICLE_COST } }
-                });
-                
-                await prisma.contentJob.update({
-                    where: { id: currentJobId },
-                    data: { status: "FAILED" }
-                });
-            } catch (rollbackError) {
-                console.error("[CRITICAL_ROLLBACK_FAILURE]: Manual intervention required.", rollbackError);
-            }
+                await prisma.transaction.create({ data: { userId: currentUserId, amount: ARTICLE_COST, type: "REFUND", description: `System Fault Refund for Job: ${currentJobId}` } });
+                await prisma.wallet.update({ where: { userId: currentUserId }, data: { creditsAvailable: { increment: ARTICLE_COST } } });
+                await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
+            } catch (rollbackError) {}
         }
-
-        return new Response(
-            JSON.stringify({ message: error.message || "A critical error occurred during initialization." }), 
-            { status: 500, headers: { 'Content-Type': 'application/json' } }
-        );
+        return new Response(JSON.stringify({ message: error.message || "A critical error occurred." }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
 }

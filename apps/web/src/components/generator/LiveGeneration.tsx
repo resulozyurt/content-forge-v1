@@ -20,7 +20,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
     const [error, setError] = useState<string | null>(null);
 
     const scrollRef = useRef<HTMLDivElement>(null);
-    const executionLock = useRef(false); // CRITICAL: Strict Mode kilidi
+    const executionLock = useRef(false);
     const abortControllerRef = useRef<AbortController | null>(null);
 
     useEffect(() => {
@@ -30,7 +30,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
     }, [blocks, currentTask]);
 
     useEffect(() => {
-        // Dev Mode'da çift çalışmayı (Double execution) kesin olarak engelle
         if (executionLock.current) return;
         executionLock.current = true;
         let isMounted = true;
@@ -42,7 +41,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                 abortControllerRef.current = new AbortController();
 
-                // Sanitize the config payload to ensure Zod validation passes
                 const sanitizedConfig = {
                     language: "English (US)",
                     tone: "Highly Professional, Data-Driven, Authoritative",
@@ -106,17 +104,18 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                                     if (isMounted) {
                                         setBlocks((prev) => {
-                                            // Duplicate blok oluşmasını engelle (react rendering bug fix)
                                             if (prev.some(b => b.id === parsedBlock.id)) return prev;
                                             return [...prev, parsedBlock];
                                         });
 
                                         if (parsedBlock.type === 'h2' || parsedBlock.type === 'h3') {
-                                            setCurrentTask(`Drafting section: ${parsedBlock.content.substring(0, 40)}...`);
+                                            setCurrentTask(`Drafting section: ${typeof parsedBlock.content === 'string' ? parsedBlock.content.substring(0, 40) : '...'}...`);
                                         } else if (parsedBlock.type === 'paragraph') {
                                             setCurrentTask(`Applying NLP algorithms and optimizing keyword density...`);
                                         } else if (parsedBlock.type === 'image') {
                                             setCurrentTask(`Engineering precise text prompts for visual assets...`);
+                                        } else if (parsedBlock.type === 'seo_metadata') {
+                                            setCurrentTask(`Finalizing Rank Math SEO configuration...`);
                                         }
 
                                         const currentProgress = 25 + Math.min((processedBlocksCount / estimatedTotalBlocks) * 70, 70);
@@ -131,7 +130,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 }
 
             } catch (err: any) {
-                if (err.name === 'AbortError') return; // Bileşen unmount olduysa hatayı yoksay
+                if (err.name === 'AbortError') return;
                 console.error("[GENERATION_FAULT]:", err);
                 if (isMounted) {
                     setError(err.message || "A critical fault interrupted the sequence.");
@@ -145,14 +144,13 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         return () => {
             isMounted = false;
             if (abortControllerRef.current) {
-                abortControllerRef.current.abort(); // Unmount sırasında stream'i öldür
+                abortControllerRef.current.abort();
             }
         };
     }, [outlineData]);
 
     return (
         <div className="w-full max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in-95 duration-500">
-            {/* Header & Progress Bar */}
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -199,7 +197,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 </div>
             </div>
 
-            {/* Live Terminal / Document View */}
             <div
                 ref={scrollRef}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-inner overflow-y-auto p-8 h-[600px] scroll-smooth"
@@ -214,27 +211,38 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                     {blocks.map((block) => (
                         <div key={block.id} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            {block.type === 'h2' && (
+                            {block.type === 'h2' && typeof block.content === 'string' && (
                                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white mt-8 mb-4 border-b border-gray-100 dark:border-gray-800 pb-2">
                                     {block.content}
                                 </h2>
                             )}
-                            {block.type === 'h3' && (
+                            {block.type === 'h3' && typeof block.content === 'string' && (
                                 <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mt-6 mb-3">
                                     {block.content}
                                 </h3>
                             )}
-                            {block.type === 'paragraph' && (
+                            {block.type === 'paragraph' && typeof block.content === 'string' && (
                                 <p
                                     className="text-gray-600 dark:text-gray-300 leading-relaxed text-lg"
                                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(block.content) }}
                                 />
                             )}
-                            {block.type === 'image' && (
+                            {block.type === 'image' && typeof block.content === 'string' && (
                                 <div
                                     className="my-8 animate-in fade-in zoom-in duration-500"
                                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(block.content) }}
                                 />
+                            )}
+                            {block.type === 'seo_metadata' && (
+                                <div className="my-8 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4 flex items-center gap-4 shadow-sm animate-in zoom-in duration-500">
+                                    <div className="p-2 bg-indigo-100 dark:bg-indigo-800 rounded-lg">
+                                        <Sparkles className="text-indigo-600 dark:text-indigo-300" size={24} />
+                                    </div>
+                                    <div>
+                                        <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100">Rank Math SEO Module Active</h4>
+                                        <p className="text-xs text-indigo-700 dark:text-indigo-300 mt-1">Focus Keyword, Meta Title, and Description successfully synthesized.</p>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     ))}
