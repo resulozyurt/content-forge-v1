@@ -7,21 +7,21 @@ import { Resend } from 'resend';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 
-// Initialize the Resend client utilizing the environment variable securely injected via Railway.
+// Initialize the Resend API client to bypass SMTP port restrictions on edge networks
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function POST(req: Request) {
   try {
-    // 1. Rate Limiting: Prevent registration spam and automated brute-force attacks at the edge.
+    // 1. Rate Limiting: Prevent registration spam attacks
     const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
-    const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000);
+    const limiter = await rateLimit(`register_${ip}`, 5, 60 * 60 * 1000); 
 
     if (!limiter.success) {
       return NextResponse.json(
         { error: 'Too many registration attempts. Please try again in an hour.' }, 
         { 
-          status: 429, 
-          headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
+            status: 429, 
+            headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
         }
       );
     }
@@ -29,28 +29,28 @@ export async function POST(req: Request) {
     const { email, password } = await req.json();
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password fields are strictly required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
     }
 
-    // 2. Verify if the user already exists in the registry to prevent duplicate accounts and collisions.
+    // 2. Verify if the user already exists in the registry to prevent duplicate accounts
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      return NextResponse.json({ error: 'This email address is already registered in our system.' }, { status: 400 });
+      return NextResponse.json({ error: 'This email address is already registered.' }, { status: 400 });
     }
 
-    // 3. Encrypt the user's password utilizing bcrypt with a secure work factor of 10.
+    // 3. Encrypt the user's password utilizing bcrypt with a work factor of 10
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // 4. Generate a cryptographically secure 6-digit verification sequence.
+    // 4. Generate a cryptographically secure 6-digit verification sequence
     const plainOtpCode = crypto.randomInt(100000, 999999).toString();
     
-    // 5. Secure the OTP code via hashing before persisting to the database. Never store plain text.
+    // 5. Secure the OTP code via hashing before persisting to the database
     const hashedOtpCode = await bcrypt.hash(plainOtpCode, 10);
     
-    // OTP validity window: Expires strictly 15 minutes from the exact moment of generation.
+    // OTP validity window: Expires strictly 15 minutes from generation
     const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    // 6. Persist the new user payload to the database with a pending verification state.
+    // 6. Persist the new user payload to the database
     await prisma.user.create({
       data: {
         email,
@@ -61,9 +61,9 @@ export async function POST(req: Request) {
       },
     });
 
-    // 7. Dispatch the verification email via Resend API utilizing the generated plain code.
+    // 7. Dispatch the verification email via the Resend HTTP API (avoids SMTP blockades)
     const { error: emailError } = await resend.emails.send({
-      from: 'Content Forge Security <onboarding@contentforge.ai>',
+      from: 'Content Forge Security <onboarding@resend.dev>', // Adjust to your verified domain later
       to: [email],
       subject: 'Verify Your Identity - Content Forge',
       html: `
@@ -78,20 +78,12 @@ export async function POST(req: Request) {
           <p style="color: #ef4444; font-size: 14px; text-align: center; font-weight: 500;">
             This security code will expire in exactly 15 minutes.
           </p>
-          <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 32px 0;" />
-          <p style="color: #9ca3af; font-size: 12px; text-align: center;">
-            If you did not initiate this request, please disregard this email. Your account remains secure.
-          </p>
         </div>
       `,
     });
 
-    // We proceed with the registration response even if the email pipeline fails. 
-    // The user record exists, and they can utilize a "Resend OTP" fallback endpoint later.
     if (emailError) {
-      console.error('[EMAIL_DISPATCH_FAULT]: Failed to route OTP email via Resend API.', emailError);
-    } else {
-      console.log(`[AUTH_PIPELINE] Verification sequence successfully dispatched to: ${email}`);
+      console.error('[EMAIL_DISPATCH_FAULT]: Failed to route OTP email via Resend.', emailError);
     }
 
     return NextResponse.json({ 
