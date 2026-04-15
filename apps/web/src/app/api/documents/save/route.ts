@@ -29,12 +29,15 @@ export async function POST(req: Request) {
         const safePayload = inputData ? JSON.parse(JSON.stringify(inputData)) : {};
         safePayload.title = title || "Generated SEO Article";
 
+        // GÜVENLİK FİLTRESİ: Gelen model şemadaki Enum'lardan biri değilse, sistem çökmesin diye CLAUDE'u varsayılan olarak ata.
+        const validAiModel = (aiModel === "claude-sonnet-4-6" || aiModel === "GPT_4_OMNI") ? aiModel : "claude-sonnet-4-6";
+
         // 4. Persist the generated document to the ledger
         const savedDocument = await prisma.contentJob.create({
             data: {
                 userId: (session.user as any).id,
                 toolId: tool.id,
-                aiModel: aiModel || "GPT_4_OMNI",
+                aiModel: validAiModel,
                 status: "COMPLETED",
                 inputPayload: safePayload, 
                 outputContent: content,

@@ -149,7 +149,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     body: JSON.stringify({
                         title: metaTitle,
                         content: htmlContent,
-                        aiModel: "Enterprise Configuration",
+                        aiModel: "claude-sonnet-4-6",
                         inputData: outlineData
                     })
                 });
