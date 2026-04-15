@@ -18,15 +18,15 @@ export default function RegisterForm() {
         setIsLoading(true);
         setError(null);
 
-        // Basic client-side validation
+        // Enforce basic client-side validation constraints
         if (password !== confirmPassword) {
-            setError("Passwords do not match");
+            setError("Passwords do not match. Please verify your input.");
             setIsLoading(false);
             return;
         }
 
         if (password.length < 8) {
-            setError("Password must be at least 8 characters long");
+            setError("Password must meet the minimum requirement of 8 characters.");
             setIsLoading(false);
             return;
         }
@@ -43,11 +43,15 @@ export default function RegisterForm() {
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.error || "Failed to register");
+                throw new Error(data.error || "A critical error occurred during registration.");
             }
 
-            // Registration successful, redirect to login page
-            router.push("/auth/login?registered=true");
+            // Temporarily stash the plain-text password in session storage to facilitate the auto-login sequence.
+            // This payload is strictly ephemeral and will be scrubbed immediately upon successful verification.
+            sessionStorage.setItem("pending_creds", JSON.stringify({ password }));
+
+            // Route the user to the OTP validation interface, preserving the email context
+            router.push(`/auth/verify?email=${encodeURIComponent(email)}`);
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -119,7 +123,7 @@ export default function RegisterForm() {
                     disabled={isLoading}
                     className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                    {isLoading ? "Creating account..." : "Sign up"}
+                    {isLoading ? "Processing..." : "Sign up"}
                 </button>
             </form>
 
