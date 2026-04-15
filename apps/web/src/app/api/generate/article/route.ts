@@ -10,7 +10,6 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "@contentforge/database"; 
 
-// Initialize AI SDK clients. Priority: Anthropic (Claude)
 const openai = new OpenAI();
 const anthropic = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY || "",
@@ -48,10 +47,7 @@ export async function POST(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions);
         if (!session?.user?.id) {
-            return new Response(
-                JSON.stringify({ message: "Unauthorized access. Please authenticate to proceed." }), 
-                { status: 401, headers: { 'Content-Type': 'application/json' } }
-            );
+            return new Response(JSON.stringify({ message: "Unauthorized access." }), { status: 401 });
         }
 
         currentUserId = (session.user as any).id;
@@ -60,32 +56,26 @@ export async function POST(req: NextRequest) {
         const limiter = await rateLimit(`gen_article_${currentUserId}_${ip}`, 10, 60 * 60 * 1000);
 
         if (!limiter.success) {
-            return new Response(
-                JSON.stringify({ message: "Generation quota reached. Please check back later." }), 
-                { status: 429, headers: { 'Content-Type': 'application/json', ...getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) } }
-            );
+            return new Response(JSON.stringify({ message: "Generation quota reached." }), { status: 429 });
         }
 
         const rawBody = await req.json();
         const parseResult = generationPayloadSchema.safeParse(rawBody);
 
         if (!parseResult.success) {
-            return new Response(
-                JSON.stringify({ message: "Invalid payload provided.", errors: parseResult.error.format() }), 
-                { status: 400, headers: { 'Content-Type': 'application/json' } }
-            );
+            return new Response(JSON.stringify({ message: "Invalid payload.", errors: parseResult.error.format() }), { status: 400 });
         }
 
         const { outlineData, config } = parseResult.data;
 
         const activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
-        if (!activeTool) throw new Error("System Configuration Fault: No active AI tools found in the database.");
+        if (!activeTool) throw new Error("No active AI tools found.");
 
         const contentJob = await prisma.contentJob.create({
             data: {
                 userId: currentUserId,
                 toolId: activeTool.id,
-                aiModel: config.engine.toLowerCase().includes("claude") ? "CLAUDE_3_5_SONNET" : "GPT_4_OMNI",
+                aiModel: "CLAUDE_3_5_SONNET", 
                 status: "PROCESSING",
                 inputPayload: rawBody,
             }
@@ -101,22 +91,14 @@ export async function POST(req: NextRequest) {
         const wordsPerSection = Math.max(150, Math.floor(targetTotalWords / totalHeadings));
 
         let brandContext = "";
-        let brandNameContext = "";
         
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
-                    brandNameContext = brandProfile.name;
-                    brandContext = `\nBRAND IDENTITY INJECTION RULE:
-You MUST organically weave the following brand into the content.
-- Brand Name: ${brandProfile.name}
-- Core Offerings: ${brandProfile.description}
-CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
+                    brandContext = `\nBRAND GUIDELINES:\nNaturally weave in ${brandProfile.name} (${brandProfile.description}) as an industry solution. Do not sound promotional.`;
                 }
-            } catch (brandError) {
-                console.warn("[BRAND_FETCH_WARNING]: Could not retrieve brand profile.", brandError);
-            }
+            } catch (e) {}
         }
 
         const encoder = new TextEncoder();
@@ -134,54 +116,31 @@ CRITICAL: Maintain authoritative tone. Avoid cheap advertising language.`;
                 };
 
                 try {
-                    // --- PHASE 3: ADVANCED RAG LINKER & SITEMAP INTEGRATION ---
-                    let internalLinks: string[] = [];
+                    // --- GLOBAL LINK STATE INITIALIZATION ---
+                    let availableInternalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
                             const sitemapRes = await fetch(config.wpSitemap, { signal: AbortSignal.timeout(8000) });
                             if (sitemapRes.ok) {
                                 const sitemapXml = await sitemapRes.text();
                                 const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]);
-                                
                                 const isTurkish = config.language.toLowerCase().includes('tr');
                                 let filteredLinks = matches.filter(url => {
                                     if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
                                     else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
                                 });
-
                                 if (filteredLinks.length === 0) filteredLinks = matches;
-
-                                // Shuffle and limit to 15 to provide dynamic variety across generations
-                                internalLinks = filteredLinks.sort(() => 0.5 - Math.random()).slice(0, 15);
+                                availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random()).slice(0, 10);
                             }
-                        } catch (e) {
-                            console.warn("[SEO_PIPELINE_WARNING] Sitemap fetch timed out.");
-                        }
+                        } catch (e) {}
                     }
 
-                    const externalLinksContext = outlineData.sourceUrls.length > 0 
-                        ? `EXTERNAL LINK RULE: To build authority, you MAY insert MAX ONE external link from: [${outlineData.sourceUrls.join(', ')}]. ONLY use it if it contextually strengthens the factual claim. Format: <a href="[URL]" target="_blank" rel="noopener noreferrer">[Anchor Text]</a>.`
-                        : `EXTERNAL LINK RULE: Do not add external links.`;
-
-                    const internalLinksContext = internalLinks.length > 0
-                        ? `INTERNAL LINK RULE: You have access to these internal URLs: [${internalLinks.join(', ')}]. You MAY organically insert MAX ONE internal link IF it perfectly matches the paragraph's context. Do NOT force it. Format: <a href="[URL]">[Anchor Text]</a>.`
-                        : `INTERNAL LINK RULE: Skip internal linking.`;
-
-                    const systemPrompt = `You are an elite Senior SEO Engineer and NLP Content Strategist. 
-Task: Write a high-density, expert-level section for the heading provided.
-
-STRICT RULES:
-1. NO FLUFF: Deliver pure, factual, analytical value immediately.
-2. LANGUAGE: EXACTLY ${config.language}.
-3. TONE: ${config.tone}.
-4. DEPTH: ${config.depth}.
-5. LENGTH TARGET: ~${wordsPerSection} words. NEVER truncate.
-6. ${externalLinksContext}
-7. ${internalLinksContext}${brandContext}`;
-
+                    let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])]; 
+                    
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; 
 
+                    // --- GENERATION LOOP ---
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
@@ -190,7 +149,36 @@ STRICT RULES:
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        const userMessage = `Original Heading: "${heading.text}"\nTarget NLP Keyword: "${targetKeyword}"`;
+                        // Link Assignment Logic (Prevents Spam)
+                        let externalLinksContext = "Do NOT add any external links in this section.";
+                        if (availableExternalLinks.length > 0 && i % 2 !== 0) {
+                            const linkToUse = availableExternalLinks.pop();
+                            externalLinksContext = `EXTERNAL LINK RULE: You MUST organically insert this exact external link: <a href="${linkToUse}" target="_blank" rel="noopener noreferrer">${linkToUse}</a>.`;
+                        }
+
+                        let internalLinksContext = "Do NOT add any internal links in this section.";
+                        if (availableInternalLinks.length > 0 && i % 2 === 0) {
+                            const linkToUse = availableInternalLinks.pop();
+                            internalLinksContext = `INTERNAL LINK RULE: You MUST organically insert this exact internal link: <a href="${linkToUse}">${linkToUse}</a>.`;
+                        }
+
+                        // THE NEW REVOLUTIONARY SEO & READABILITY PROMPT
+                        const systemPrompt = `You are an elite Senior SEO Content Architect.
+Task: Write a highly readable, engaging, and structured section for the given heading.
+
+CRITICAL READABILITY & FORMATTING RULES:
+1. NO WALLS OF TEXT: Keep paragraphs short (maximum 3-4 sentences).
+2. RICH HTML STRUCTURE: You MUST use HTML elements to break up the text. Depending on the context, include at least one of the following in your response:
+   - An unordered <ul> or ordered <ol> list to summarize key points.
+   - An HTML <table> to compare data or features.
+   - A checklist using <ul> with engaging formatting.
+3. EMPHASIS: Bold (<strong>) important SEO entities and key takeaways to improve scannability.
+4. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Depth: ${config.depth}.
+5. LENGTH: Write approximately ${wordsPerSection} words. NEVER truncate.
+6. ${externalLinksContext}
+7. ${internalLinksContext}${brandContext}`;
+
+                        const userMessage = `Original Heading: "${heading.text}"\nTarget NLP Keyword to incorporate naturally: "${targetKeyword}"`;
                         
                         let finalHeadingText = heading.text;
                         let generatedText = "";
@@ -205,7 +193,7 @@ STRICT RULES:
                                     tools: [
                                         {
                                             name: "generate_section",
-                                            description: "Generates semantic HTML content and a refined heading.",
+                                            description: "Generates highly formatted HTML content and a refined heading.",
                                             input_schema: {
                                                 type: "object",
                                                 properties: {
@@ -217,15 +205,12 @@ STRICT RULES:
                                         }
                                     ],
                                     tool_choice: { type: "tool", name: "generate_section" },
-                                    temperature: 0.6,
+                                    temperature: 0.7,
                                 });
                                 
                                 const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                                 if (toolUseBlock) {
-                                    const parsedData: any = typeof toolUseBlock.input === 'string' 
-                                        ? JSON.parse(toolUseBlock.input) 
-                                        : toolUseBlock.input;
-                                        
+                                    const parsedData: any = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
                                     finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                     generatedText = parsedData.htmlContent || "";
                                 }
@@ -237,16 +222,14 @@ STRICT RULES:
                                         { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object: { "rewrittenHeading": "...", "htmlContent": "..." }` },
                                         { role: "user", content: userMessage }
                                     ],
-                                    temperature: 0.6,
+                                    temperature: 0.7,
                                 });
-                                const rawContent = textCompletion.choices[0].message.content || "{}";
-                                const parsedData = JSON.parse(rawContent);
+                                const parsedData = JSON.parse(textCompletion.choices[0].message.content || "{}");
                                 finalHeadingText = parsedData.rewrittenHeading || heading.text;
                                 generatedText = parsedData.htmlContent || "";
                             }
                         } catch (parseError) {
                             console.error("[PARSE_FAULT] Pipeline execution failed.", parseError);
-                            generatedText = "<p>Content pipeline encountered a formatting fault.</p>";
                         }
 
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
@@ -255,32 +238,23 @@ STRICT RULES:
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
+                        // IMAGE GENERATION FALLBACK & LOGIC
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
                                     max_tokens: 1000,
-                                    system: `You are an expert art director. Create visual metadata for an image.
-CRITICAL RULES:
-1. The 'prompt' MUST be in English. SEO fields must be in ${config.language}.
-2. Style: ULTRA-REALISTIC, DSLR photography, natural lighting. NO text.`,
-                                    messages: [{ role: "user", content: `Create visual metadata for section: "${finalHeadingText}".` }],
-                                    tools: [
-                                        {
-                                            name: "generate_image_metadata",
-                                            description: "Provides metadata for image generation.",
-                                            input_schema: {
-                                                type: "object",
-                                                properties: {
-                                                    prompt: { type: "string" },
-                                                    alt: { type: "string" },
-                                                    title: { type: "string" },
-                                                    caption: { type: "string" }
-                                                },
-                                                required: ["prompt", "alt", "title", "caption"]
-                                            }
+                                    system: `Create a visual prompt in English and SEO fields in ${config.language}. Style: ULTRA-REALISTIC, NO text.`,
+                                    messages: [{ role: "user", content: `Create visual metadata for: "${finalHeadingText}".` }],
+                                    tools: [{
+                                        name: "generate_image_metadata",
+                                        description: "Provides metadata for image generation.",
+                                        input_schema: {
+                                            type: "object",
+                                            properties: { prompt: { type: "string" }, alt: { type: "string" }, title: { type: "string" }, caption: { type: "string" } },
+                                            required: ["prompt", "alt", "title", "caption"]
                                         }
-                                    ],
+                                    }],
                                     tool_choice: { type: "tool", name: "generate_image_metadata" },
                                     temperature: 0.7,
                                 });
@@ -294,55 +268,45 @@ CRITICAL RULES:
                                     let imgHtml = "";
 
                                     if (geminiApiKey) {
-                                        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`, {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({ contents: [{ parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, raw photography, natural lighting, NO text" }] }] })
-                                        });
+                                        try {
+                                            const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiApiKey}`, {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ contents: [{ parts: [{ text: promptData.prompt + " Ultra-realistic, DSLR quality, NO text" }] }] })
+                                            });
 
-                                        if (geminiRes.ok) {
-                                            const geminiData = await geminiRes.json();
-                                            const parts = geminiData.candidates?.[0]?.content?.parts || [];
-                                            for (const part of parts) {
-                                                if (part.inlineData && part.inlineData.data) {
-                                                    b64Image = part.inlineData.data;
-                                                    break;
-                                                }
+                                            if (geminiRes.ok) {
+                                                const geminiData = await geminiRes.json();
+                                                b64Image = geminiData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "";
+                                            } else {
+                                                console.error("[GEMINI_API_ERROR]", await geminiRes.text());
                                             }
+                                        } catch (e) {
+                                            console.error("[GEMINI_NETWORK_ERROR]", e);
                                         }
                                     }
 
                                     if (b64Image) {
                                         imgHtml = `<figure class="my-8"><img src="data:image/jpeg;base64,${b64Image}" alt="${promptData.alt}" title="${promptData.title}" class="w-full rounded-xl shadow-lg border border-gray-200" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption></figure>`;
                                     } else {
-                                        imgHtml = `<div class="border-l-4 border-indigo-500 bg-indigo-50/50 p-4 my-6 rounded-r-lg"><span class="text-xs font-bold text-indigo-600 uppercase mb-2 block">Visual Asset Pending</span><p class="text-gray-800 font-mono text-sm">${promptData.prompt}</p></div>`;
+                                        imgHtml = `<div class="border-l-4 border-indigo-500 bg-indigo-50 p-4 my-6"><span class="text-xs font-bold text-indigo-600 block">Visual Prompt Generated (API Offline)</span><p class="text-sm">${promptData.prompt}</p></div>`;
                                     }
                                     fullGeneratedHtml += `${imgHtml}\n`; 
                                     sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                 }
-                            } catch (promptError) {
-                                console.error("[IMAGE_GENERATION_FAULT]:", promptError);
-                            }
+                            } catch (e) { console.error("[IMAGE_FAULT]", e); }
                         }
                     }
 
+                    // SEO Generation
                     let finalSeoMetadata = null;
                     try {
-                        const seoSystemPrompt = `You are a Senior Technical SEO Architect.
-Task: Generate Rank Math compatible metadata for the generated article.
-RULES:
-1. Language MUST be exactly: ${config.language}.
-2. Provide a 'focusKeyword' that represents the main topic perfectly.
-3. Provide a 'metaTitle' (max 60 characters, highly clickable).
-4. Provide a 'metaDescription' (max 160 characters, strong CTA).`;
-
                         const contentSample = fullGeneratedHtml.substring(0, 5000); 
-
                         const seoResponse = await anthropic.messages.create({
                             model: "claude-sonnet-4-6",
                             max_tokens: 500,
-                            system: seoSystemPrompt,
-                            messages: [{ role: "user", content: `Analyze this content and generate SEO JSON:\n\n${contentSample}` }],
+                            system: `Generate Rank Math metadata. Language: ${config.language}.`,
+                            messages: [{ role: "user", content: `Analyze this content:\n\n${contentSample}` }],
                             tools: [{
                                 name: "set_rank_math_metadata",
                                 description: "Outputs strict Rank Math metadata.",
@@ -361,23 +325,16 @@ RULES:
                             finalSeoMetadata = typeof seoBlock.input === 'string' ? JSON.parse(seoBlock.input) : seoBlock.input;
                             sendEvent({ id: `seo-${Date.now()}`, type: 'seo_metadata', content: finalSeoMetadata });
                         }
-                    } catch (seoError) {
-                        console.error("[SEO_METADATA_GENERATION_FAULT]:", seoError);
-                    }
+                    } catch (e) {}
 
                     await prisma.contentJob.update({
                         where: { id: currentJobId! },
-                        data: {
-                            status: "COMPLETED",
-                            outputContent: fullGeneratedHtml,
-                            seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined
-                        }
+                        data: { status: "COMPLETED", outputContent: fullGeneratedHtml, seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined }
                     });
 
                     closeStream();
 
                 } catch (streamError) {
-                    console.error("[STREAM_EXECUTION_FAULT]:", streamError);
                     if (currentJobId) await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
                     closeStream(); 
                 }
@@ -389,11 +346,11 @@ RULES:
     } catch (error: any) {
         if (areCreditsDeducted && currentJobId) {
             try {
-                await prisma.transaction.create({ data: { userId: currentUserId, amount: ARTICLE_COST, type: "REFUND", description: `System Fault Refund for Job: ${currentJobId}` } });
+                await prisma.transaction.create({ data: { userId: currentUserId, amount: ARTICLE_COST, type: "REFUND", description: "System Fault" } });
                 await prisma.wallet.update({ where: { userId: currentUserId }, data: { creditsAvailable: { increment: ARTICLE_COST } } });
                 await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
-            } catch (rollbackError) {}
+            } catch (e) {}
         }
-        return new Response(JSON.stringify({ message: error.message || "A critical error occurred." }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({ message: "A critical error occurred." }), { status: 500 });
     }
 }
