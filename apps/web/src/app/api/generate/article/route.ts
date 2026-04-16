@@ -76,15 +76,14 @@ export async function POST(req: NextRequest) {
         await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
         areCreditsDeducted = true;
 
-        // Reserve ~250 words for the final FAQ and Conclusion section
         const totalHeadings = outlineData.headings.length;
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
         const wordsPerSection = Math.max(80, Math.floor((targetTotalWords - 250) / totalHeadings));
 
-        // --- BRAND INJECTION LOGIC (FIELDPIE SUPPORT) ---
+        // --- BRAND ADVOCACY ENGINE ---
         let brandContext = "";
         let brandName = "Our Company";
-        let brandDesc = "an industry leading solution";
+        let brandDesc = "an industry-leading solution";
 
         if (config.enableBrandVoice) {
             try {
@@ -92,12 +91,17 @@ export async function POST(req: NextRequest) {
                 if (brandProfile) {
                     brandName = brandProfile.name;
                     brandDesc = brandProfile.description;
-                    brandContext = `\n[MANDATORY BRAND DIRECTIVE]: 
-You represent the brand: "${brandName}". Core offering: "${brandDesc}".
-1. IF the heading implies a "Listicle" or "Comparison" (e.g., "Top Retail Execution Tools", "Best Software Compared"), YOU MUST FORCEFULLY INCLUDE "${brandName}" as the #1 recommended solution in that list. Do not omit it.
-2. IF the heading is a general explanation, subtly weave "${brandName}" into the text as an objective industry standard solving the problem. Use <strong> tags for the brand name.`;
+                    brandContext = `\n[CRITICAL BRAND ADVOCACY DIRECTIVE]:
+You are an elite brand advocate and content strategist for "${brandName}". 
+Core Offering: "${brandDesc}".
+Rules of Engagement:
+1. THE MARKET LEADER: Position "${brandName}" as the undisputed industry standard. Speak with absolute authority about its superiority.
+2. LISTICLES & COMPARISONS: If this heading discusses "Best Tools", "Alternatives", or compares software, "${brandName}" MUST be prominently featured as the #1 highly recommended option. Politely but firmly highlight the flaws of competitors while amplifying the unique value proposition of "${brandName}".
+3. SUBTLE AUTHORITY: For general educational sections, weave "${brandName}" in organically as the ultimate solution to the pain points being discussed. Always use <strong> tags for the brand name.`;
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error("[BRAND_PROFILE_FETCH_FAULT]:", e);
+            }
         }
 
         const encoder = new TextEncoder();
@@ -114,7 +118,7 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                 };
 
                 try {
-                    // --- LINK POOL INITIALIZATION ---
+                    // --- SEMANTIC LINK POOL INITIALIZATION ---
                     let availableInternalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
@@ -128,11 +132,13 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                                     else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
                                 });
                                 if (filteredLinks.length === 0) filteredLinks = matches;
-                                availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random()).slice(0, 15);
+                                availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random());
                             }
-                        } catch (e) {}
+                        } catch (e) {
+                            console.error("[SITEMAP_FETCH_FAULT]:", e);
+                        }
                     }
-                    let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])]; 
+                    let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])].sort(() => 0.5 - Math.random()); 
                     
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; 
@@ -148,32 +154,31 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
 
                         const targetWords = heading.level === 'h2' ? wordsPerSection + 50 : Math.max(60, wordsPerSection - 20);
 
-                        // --- STRICT LINK ASSIGNMENT ---
-                        let externalLinksContext = "Do NOT add any external links in this section.";
-                        if (availableExternalLinks.length > 0 && i % 3 === 0) {
-                            const linkToUse = availableExternalLinks.pop();
-                            externalLinksContext = `EXTERNAL LINK RULE: You may organically insert this exact external link ONCE: <a href="${linkToUse}" target="_blank" rel="noopener noreferrer">${linkToUse}</a>. CRITICAL: Only use it as an academic/industry citation to back up a fact or statistic. NEVER use it as a "Click here for more" CTA.`;
+                        let linkStrategyContext = "";
+                        const contextualInternalLinks = availableInternalLinks.slice(i * 2, (i * 2) + 2); 
+                        if (contextualInternalLinks.length > 0) {
+                            linkStrategyContext += `\n[INTERNAL LINKING]: You have access to these internal URLs: ${contextualInternalLinks.join(", ")}. IF and ONLY IF one of these conceptually matches the topic of this section, weave it in organically using high-value, descriptive anchor text. Max 1 internal link.`;
                         }
 
-                        let internalLinksContext = "Do NOT add any internal links in this section.";
-                        if (availableInternalLinks.length > 0 && i % 2 !== 0) {
-                            const linkToUse = availableInternalLinks.pop();
-                            internalLinksContext = `INTERNAL LINK RULE: Naturally weave this internal URL <a href="${linkToUse}">into a relevant keyword</a> within the paragraph to guide the user deeper into our site. Do not make it look like a button.`;
+                        if (availableExternalLinks.length > 0 && i % 3 === 0) { 
+                            const externalLink = availableExternalLinks.pop();
+                            linkStrategyContext += `\n[EXTERNAL CITATION]: You may organically insert this external reference ONCE: <a href="${externalLink}" target="_blank" rel="noopener noreferrer">${externalLink}</a>. CRITICAL: Use it strictly as an academic citation.`;
                         }
 
-                        // --- DYNAMIC FORMATTING PROMPT ---
+                        // --- PHASE 3: RICH FORMATTING ENGINE (DYNAMIC STRUCTURES) ---
                         const systemPrompt = `You are an elite Senior SEO Content Architect. Write the highly readable HTML content body for the EXACT heading provided.
 
-[FORMATTING RULES - DO NOT BE ROBOTIC]:
+[MANDATORY RICH ELEMENTS & FORMATTING RULES]:
 1. DO NOT REWRITE THE HEADING. The user has provided the exact heading. You only generate the body content below it.
-2. NATURAL FLOW: Do NOT force a bulleted list or a quote into every single section. Use standard paragraphs (max 2-3 sentences each) for general explanations.
-3. USE RICH ELEMENTS STRATEGICALLY:
-   - IF the heading implies a comparison (e.g., "Top Software", "Pros and Cons"), YOU MUST create an HTML <table>.
-   - IF the heading implies steps or a checklist, use a <ul> or <ol>.
-4. EMPHASIS: Bold (<strong>) important entities.
+2. KILL THE WALL OF TEXT: Break content into short paragraphs (max 2-3 sentences).
+3. DYNAMIC STRUCTURE (CRITICAL): Analyze the heading. 
+   - IF the heading implies a comparison, vs, pros/cons, or pricing, YOU MUST output a styled HTML <table>.
+   - IF the heading implies a process, steps, checklist, or multiple features, YOU MUST output an HTML <ul> or <ol>.
+   - IF stating a crucial industry fact or quote, wrap it in a <blockquote>.
+4. EMPHASIS: Bold (<strong>) important entities and concepts.
 5. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~${targetWords} words.
-6. ${externalLinksContext}
-7. ${internalLinksContext}${brandContext}`;
+${linkStrategyContext}
+${brandContext}`;
 
                         const userMessage = `Write the highly readable HTML content body for the heading: "${heading.text}"\nTarget Keyword: "${targetKeyword}"`;
                         
@@ -194,7 +199,7 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                                             input_schema: {
                                                 type: "object",
                                                 properties: {
-                                                    htmlContent: { type: "string", description: "The HTML content (paragraphs, lists, tables)." }
+                                                    htmlContent: { type: "string", description: "The HTML content (paragraphs, lists, tables, blockquotes)." }
                                                 },
                                                 required: ["htmlContent"]
                                             }
@@ -232,44 +237,43 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        // --- HIGH-QUALITY POLLINATIONS AI IMAGE ENGINE ---
-                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 3 === 0) {
+                        // --- PHASE 4: HIGH-FIDELITY IMAGE ENGINE (DALL-E 3) ---
+                        // Trigger exactly every 2 H2 headings as requested.
+                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0) {
                             try {
+                                // Step 1: Generate a perfect image prompt using Claude
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", 
-                                    max_tokens: 500,
-                                    system: `Create an English visual prompt. Style: Ultra-realistic corporate photography, raw DSLR, cinematic lighting, real humans working in an office or retail store, highly detailed faces, NO text, NO labels.`,
-                                    messages: [{ role: "user", content: `Create visual metadata for: "${finalHeadingText}". Focus on human interaction if possible.` }],
-                                    tools: [{
-                                        name: "generate_image_metadata",
-                                        description: "Provides metadata for image generation.",
-                                        input_schema: {
-                                            type: "object",
-                                            properties: { prompt: { type: "string" }, alt: { type: "string" }, caption: { type: "string" } },
-                                            required: ["prompt", "alt", "caption"]
-                                        }
-                                    }],
-                                    tool_choice: { type: "tool", name: "generate_image_metadata" },
-                                    temperature: 0.7,
+                                    max_tokens: 300,
+                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
+                                    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
                                 });
 
-                                const toolUseBlock = promptReq.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
-                                const promptData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
+                                const optimizedPrompt = promptReq.content[0]?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
 
-                                if (promptData.prompt) {
-                                    const encodedPrompt = encodeURIComponent(promptData.prompt + " ultra realistic 8k photography, clean layout, highly detailed, real humans, DSLR, no text");
-                                    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=800&height=450&nologo=true`;
+                                // Step 2: Generate the image using OpenAI's DALL-E 3 API
+                                const imageResponse = await openai.images.generate({
+                                    model: "dall-e-3",
+                                    prompt: optimizedPrompt.substring(0, 900),
+                                    n: 1,
+                                    size: "1024x1024",
+                                    quality: "hd",
+                                    style: "natural" // Forces photographic realism over illustrations
+                                });
 
+                                const imageUrl = imageResponse.data[0]?.url;
+
+                                if (imageUrl) {
                                     const imgHtml = `
-                                        <figure class="my-8">
-                                            <img src="${imageUrl}" alt="${promptData.alt}" class="w-full rounded-xl shadow-lg border border-gray-200" />
-                                            <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${promptData.caption}</figcaption>
+                                        <figure class="my-10">
+                                            <img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" />
+                                            <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${finalHeadingText}</figcaption>
                                         </figure>
                                     `;
                                     fullGeneratedHtml += `${imgHtml}\n`; 
                                     sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                 }
-                            } catch (e) { console.error("[IMAGE_FAULT]", e); }
+                            } catch (e) { console.error("[IMAGE_ENGINE_FAULT]", e); }
                         }
                     }
 
@@ -278,11 +282,10 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                     
                     const finalInternalLink = availableInternalLinks.length > 0 ? availableInternalLinks[0] : "#";
                     
-                    const conclusionPrompt = `Write the final Conclusion and FAQ section for the article. Language: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~250 words.
-                    1. Generate 3 highly relevant FAQ questions and answers using an HTML <dl> (description list) or <h3> structure.
-                    2. Generate a 'Final Verdict / Conclusion' heading (<h2>).
-                    3. Write a compelling summary paragraph.
-                    4. END WITH A POWERFUL CALL TO ACTION (CTA): Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML CTA button or highlighted link pointing to this exact URL: ${finalInternalLink}.`;
+                    const conclusionPrompt = `Write the final Conclusion and FAQ section for the article. Language: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~300 words.
+                    1. Generate a 'Final Verdict' heading (<h2>) summarizing the core value.
+                    2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML blockquote or highly visible paragraph directing them to this exact URL: ${finalInternalLink}.
+                    3. FAQ SECTION: Generate 3 highly relevant FAQ questions. Use <h3> for the question and a standard paragraph for the answer. Keep answers punchy.`;
 
                     let conclusionHtml = "";
                     try {
@@ -298,7 +301,7 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                         const parsedData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
                         conclusionHtml = (parsedData.htmlContent || "").replace(/```html|```/g, '').trim();
                         
-                        fullGeneratedHtml += `\n<h2>Conclusion & Frequently Asked Questions</h2>\n${conclusionHtml}\n`;
+                        fullGeneratedHtml += `\n${conclusionHtml}\n`;
                         sendEvent({ id: `p-faq-${Date.now()}`, type: 'paragraph', content: conclusionHtml });
                     } catch (e) {}
 
@@ -339,6 +342,7 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
                     closeStream();
 
                 } catch (streamError) {
+                    console.error("[STREAM_FAULT]:", streamError);
                     if (currentJobId) await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
                     closeStream(); 
                 }
@@ -348,12 +352,15 @@ You represent the brand: "${brandName}". Core offering: "${brandDesc}".
         return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive' } });
 
     } catch (error: any) {
+        console.error("[API_ROUTE_FAULT]:", error);
         if (areCreditsDeducted && currentJobId) {
             try {
                 await prisma.transaction.create({ data: { userId: currentUserId, amount: ARTICLE_COST, type: "REFUND", description: "System Fault" } });
                 await prisma.wallet.update({ where: { userId: currentUserId }, data: { creditsAvailable: { increment: ARTICLE_COST } } });
                 await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
-            } catch (e) {}
+            } catch (e) {
+                console.error("[REFUND_FAULT]:", e);
+            }
         }
         return new Response(JSON.stringify({ message: "A critical error occurred." }), { status: 500 });
     }
