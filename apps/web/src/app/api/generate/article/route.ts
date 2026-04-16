@@ -256,18 +256,20 @@ const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock =
 const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
 
                                 // Step 2: Generate the image using OpenAI's DALL-E 3 API
-                                const imageResponse = await openai.images.generate({
-                                    model: "dall-e-3",
-                                    prompt: optimizedPrompt.substring(0, 900),
-                                    n: 1,
-                                    size: "1024x1024",
-                                    quality: "hd",
-                                    style: "natural" // Forces photographic realism over illustrations
-                                });
+const imageResponse = await openai.images.generate({
+    model: "dall-e-3",
+    prompt: optimizedPrompt.substring(0, 900),
+    n: 1,
+    size: "1024x1024",
+    quality: "hd",
+    style: "natural" // Forces photographic realism over illustrations
+});
 
-                                const imageUrl = imageResponse.data[0]?.url;
+// FIX: Added optional chaining to 'data' to satisfy strict null checks.
+// This prevents runtime crashes if the OpenAI API returns an unexpected payload without the 'data' array.
+const imageUrl = imageResponse.data?.[0]?.url;
 
-                                if (imageUrl) {
+if (imageUrl) {
                                     const imgHtml = `
                                         <figure class="my-10">
                                             <img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" />
