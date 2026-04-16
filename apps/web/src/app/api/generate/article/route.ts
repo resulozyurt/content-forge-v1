@@ -242,14 +242,18 @@ ${brandContext}`;
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0) {
                             try {
                                 // Step 1: Generate a perfect image prompt using Claude
-                                const promptReq = await anthropic.messages.create({
-                                    model: "claude-sonnet-4-6", 
-                                    max_tokens: 300,
-                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
-                                    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
-                                });
+                                // Step 1: Generate a perfect image prompt using Claude
+const promptReq = await anthropic.messages.create({
+    model: "claude-sonnet-4-6", 
+    max_tokens: 300,
+    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
+    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
+});
 
-                                const optimizedPrompt = promptReq.content[0]?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
+// FIX: Safely narrow the union type using a Type Guard before accessing the 'text' property.
+// This prevents Next.js build failures caused by Anthropic SDK's strict union types (ThinkingBlock, ToolUseBlock, etc.)
+const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
+const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
 
                                 // Step 2: Generate the image using OpenAI's DALL-E 3 API
                                 const imageResponse = await openai.images.generate({
