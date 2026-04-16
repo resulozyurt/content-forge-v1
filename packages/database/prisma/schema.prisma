@@ -1,8 +1,5 @@
 // packages/database/prisma/schema.prisma
 
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -37,7 +34,7 @@ model User {
 
   brandProfile  BrandProfile?
   
-  // NEW: Relation to store keyword analysis sessions
+  // NEW: Relation to store keyword analysis sessions (Bugün eklediğimiz modül)
   keywordSessions KeywordSession[]
 }
 
@@ -47,15 +44,17 @@ model Transaction {
   user        User     @relation(fields: [userId], references: [id])
   amount      Int      // Negative for usage (e.g., -5), positive for top-up
   type        String   // "RESEARCH", "GENERATION", "EDIT", "PROOFREAD", "TOPUP"
-  description String?  // <-- EKSİK OLAN ALAN EKLENDİ
+  description String?  // Optional: "Article: How to bake a cake"
   createdAt   DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Wallet {
   id               String   @id @default(cuid())
   userId           String   @unique
   user             User     @relation(fields: [userId], references: [id])
-  creditsAvailable Int      @default(0) // <-- "credits" YERİNE ESKİ ORİJİNAL HALİNE DÖNDÜRÜLDÜ
+  creditsAvailable Int      @default(0)
   updatedAt        DateTime @updatedAt
 }
 
@@ -70,11 +69,11 @@ enum Role {
 
 model Tool {
   id          String       @id @default(cuid())
-  name        String       @unique 
-  slug        String       @unique 
+  name        String       @unique // e.g., "Article Generator"
+  slug        String       @unique // e.g., "article-generator"
   description String?
   price       Int          @default(1)
-  isActive    Boolean      @default(true) // <-- SENİN SİSTEMİNİN GERÇEĞİ: EKLENDİ
+  isActive    Boolean      @default(true)
   contentJobs ContentJob[]
 }
 
@@ -84,8 +83,10 @@ model ContentJob {
   toolId        String
   status        JobStatus  @default(PENDING)
   
-  inputPayload  Json       // <-- "inputData" YERİNE SENİN KODUNDAKİ ORİJİNAL İSME DÖNÜLDÜ
+  inputPayload  Json       
   outputContent String?    
+  seoMetadata   Json?
+  aiModel       AIModel?
   
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -112,7 +113,7 @@ enum JobStatus {
 
 model Translation {
   id          String   @id @default(cuid())
-  key         String   @unique // e.g., \"auth.login.button\"
+  key         String   @unique // e.g., "auth.login.button"
   enUS        String   // Primary language
   trTR        String?  // Secondary language
 }
@@ -137,20 +138,23 @@ model BrandProfile {
   id          String   @id @default(cuid())
   userId      String   @unique
   name        String
-  description String?
+  description String   @db.Text
+  sitemapUrl  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ------------------------------------------------------
-// 5. KEYWORD LAB (NEW MODULE)
+// 5. KEYWORD LAB (BUGÜN İNŞA ETTİĞİMİZ MODÜL)
 // ------------------------------------------------------
 
-// New table for storing keyword analysis sessions
 model KeywordSession {
   id          String   @id @default(cuid())
   userId      String
   seedKeyword String
-  results     Json     // Full Claude output — all 5 categories
+  results     Json     // Full Claude output — all categories
   createdAt   DateTime @default(now())
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
