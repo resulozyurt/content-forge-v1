@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, initialConfigData, ContentType, Language, AIModel, Tone, ContentDepth } from "@/types/generator";
@@ -11,9 +12,14 @@ interface GeneratorConfigProps {
 }
 
 export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProps) {
-    // Injecting fallback values for new feature properties to avoid undefined states
+    // 1. Hook to read URL parameters sent from Keyword Lab bridge
+    const searchParams = useSearchParams();
+    const prefilledTopic = searchParams.get("topic") || "";
+
+    // 2. Inject the prefilled topic directly into the initial state
     const [config, setConfig] = useState<GeneratorConfigData>({
         ...initialConfigData,
+        query: prefilledTopic, // <-- PRE-FILL MAGIC HAPPENS HERE
         targetLength: "1000",
         enableBrandVoice: true
     } as any);
@@ -73,7 +79,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             onChange={(e) => updateConfig('query', e.target.value)}
                             placeholder="e.g. best project management software for agencies"
                             className="block w-full pl-12 pr-4 py-4 text-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                            autoFocus
+                            autoFocus={!prefilledTopic} // Only autofocus if it's empty, otherwise user can just click Start
                             required
                         />
                     </div>

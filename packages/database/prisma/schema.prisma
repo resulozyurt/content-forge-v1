@@ -36,6 +36,9 @@ model User {
   transactions  Transaction[]
 
   brandProfile  BrandProfile?
+  
+  // NEW: Relation to store keyword analysis sessions
+  keywordSessions KeywordSession[]
 }
 
 model Transaction {
@@ -44,18 +47,16 @@ model Transaction {
   user        User     @relation(fields: [userId], references: [id])
   amount      Int      // Negative for usage (e.g., -5), positive for top-up
   type        String   // "RESEARCH", "GENERATION", "EDIT", "PROOFREAD", "TOPUP"
-  description String?  // Optional: "Article: How to bake a cake"
+  description String?  // <-- EKSİK OLAN ALAN EKLENDİ
   createdAt   DateTime @default(now())
-
-  @@index([userId])
 }
 
 model Wallet {
   id               String   @id @default(cuid())
   userId           String   @unique
-  creditsAvailable Int      @default(0)
-  
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id])
+  creditsAvailable Int      @default(0) // <-- "credits" YERİNE ESKİ ORİJİNAL HALİNE DÖNDÜRÜLDÜ
+  updatedAt        DateTime @updatedAt
 }
 
 enum Role {
@@ -64,31 +65,29 @@ enum Role {
 }
 
 // ------------------------------------------------------
-// 2. MODULAR TOOLS & JOBS
+// 2. CONTENT GENERATION
 // ------------------------------------------------------
 
 model Tool {
-  id          String   @id @default(cuid())
-  slug        String   @unique // e.g., "seo-writer", "ad-copy"
-  name        String   
-  isActive    Boolean  @default(true)
-  
-  jobs        ContentJob[]
+  id          String       @id @default(cuid())
+  name        String       @unique // e.g., \"Article Generator\"
+  slug        String       @unique // e.g., \"article-generator\"
+  description String?
+  price       Int          @default(1)
+  contentJobs ContentJob[]
 }
 
 model ContentJob {
-  id            String   @id @default(cuid())
+  id            String     @id @default(cuid())
   userId        String
   toolId        String
-  aiModel       AIModel  @default(CLAUDE_3_5_SONNET) // Default best model
-  status        JobStatus @default(PENDING)
+  status        JobStatus  @default(PENDING)
   
-  inputPayload  Json     // User input data (keyword, language, etc.)
-  outputContent String?  // Final generated HTML/Markdown
-  seoMetadata   Json?
+  inputData     Json       // Parameters sent to AI
+  outputContent String?    // Resulting text (Markdown/HTML)
   
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tool          Tool     @relation(fields: [toolId], references: [id])
@@ -112,7 +111,7 @@ enum JobStatus {
 
 model Translation {
   id          String   @id @default(cuid())
-  key         String   @unique // e.g., "auth.login.button"
+  key         String   @unique // e.g., \"auth.login.button\"
   enUS        String   // Primary language
   trTR        String?  // Secondary language
 }
@@ -137,10 +136,21 @@ model BrandProfile {
   id          String   @id @default(cuid())
   userId      String   @unique
   name        String
-  description String   @db.Text
-  sitemapUrl  String?
+  description String?
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ------------------------------------------------------
+// 5. KEYWORD LAB (NEW MODULE)
+// ------------------------------------------------------
+
+// New table for storing keyword analysis sessions
+model KeywordSession {
+  id          String   @id @default(cuid())
+  userId      String
+  seedKeyword String
+  results     Json     // Full Claude output — all 5 categories
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 

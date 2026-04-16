@@ -68,10 +68,14 @@ export async function PATCH(req: Request) {
                 if (isNaN(amountToAdd) || amountToAdd <= 0) throw new Error("Invalid credit allocation amount.");
                 
                 await prisma.$transaction([
-                    prisma.wallet.update({
-                        where: { userId: targetUserId },
-                        data: { creditsAvailable: { increment: amountToAdd } }
-                    }),
+                prisma.wallet.upsert({
+                where: { userId: targetUserId },
+                update: { creditsAvailable: { increment: amountToAdd } },
+                create: { 
+                    userId: targetUserId, 
+                    creditsAvailable: amountToAdd 
+                }
+            }),
                     // Maintain an immutable audit trail for administrative token injections
                     prisma.transaction.create({
                         data: {

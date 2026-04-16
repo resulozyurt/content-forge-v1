@@ -1,7 +1,7 @@
-// apps/web/src/app/[locale]/dashboard/generator/page.tsx
+// apps/web/src/app/[locale]/(app)/generator/page.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import GeneratorConfig from "@/components/generator/GeneratorConfig";
 import ResearchAccordion from "@/components/generator/ResearchAccordion";
 import OutlineBuilder from "@/components/generator/OutlineBuilder";
@@ -47,7 +47,10 @@ export default function GeneratorPage() {
         <div className="w-full max-w-6xl mx-auto pb-12">
             {currentStage === 'config' && (
                 <div className="pt-8">
-                    <GeneratorConfig onStartResearch={handleStartResearch} />
+                    {/* CRITICAL: Suspense boundary added to safely read URL parameters in child component */}
+                    <Suspense fallback={<div className="flex justify-center p-12 text-gray-500 animate-pulse">Loading AI Engine configuration...</div>}>
+                        <GeneratorConfig onStartResearch={handleStartResearch} />
+                    </Suspense>
                 </div>
             )}
 

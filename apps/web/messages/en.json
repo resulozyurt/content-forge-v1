@@ -18,5 +18,19 @@
     "settings": "Settings",
     "logout": "Sign Out",
     "admin": "Admin Panel"
-  }
+  },
+  "Admin": {
+  "commandCenter": "Command Center",
+  "description": "Manage users, wallet ledgers, and system settings.",
+  "totalUsers": "Total Users",
+  "accountOrigin": "Account Origin",
+  "securityPrivilege": "Security Privilege",
+  "networkStatus": "Network Status",
+  "tokenLedger": "Token Ledger",
+  "actions": "Actions",
+  "joined": "Joined",
+  "verified": "Verified",
+  "demote": "Demote",
+  "promote": "Promote"
+}
 }

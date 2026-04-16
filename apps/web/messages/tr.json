@@ -10,5 +10,19 @@
     "adminPanel": "Yönetici Paneli",
     "settings": "Ayarlar",
     "signOut": "Çıkış Yap"
-  }
+  },
+  "Admin": {
+  "commandCenter": "Komuta Merkezi",
+  "description": "Kullanıcıları, cüzdanları ve sistem ayarlarını yönetin.",
+  "totalUsers": "Toplam Kullanıcı",
+  "accountOrigin": "Hesap Kaynağı",
+  "securityPrivilege": "Güvenlik Yetkisi",
+  "networkStatus": "Ağ Durumu",
+  "tokenLedger": "Token Defteri",
+  "actions": "İşlemler",
+  "joined": "Katılım",
+  "verified": "Onaylı",
+  "demote": "Yetkiyi Al",
+  "promote": "Yönetici Yap"
+}
 }

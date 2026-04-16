@@ -12,13 +12,15 @@ import {
     Settings,
     ChevronLeft,
     ChevronRight,
-    Sparkles
+    Sparkles,
+    Search
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // CRITICAL: Updated routes to match the new (app) Route Group architecture
 const navigation = [
     { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
+    { name: "Keyword Lab", href: "/keyword-lab", icon: Search },
     { name: "AI Generator", href: "/generator", icon: FileEdit },
     { name: "History", href: "/history", icon: History },
     { name: "WP Configuration", href: "/settings", icon: Settings },
