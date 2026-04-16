@@ -34,7 +34,7 @@ export default async function EditorPage({
     }
 
     // 3. Deserialize the original architectural payload
-    let outlineData = document.inputData as any;
+    let outlineData = document.inputPayload as any;
     if (typeof outlineData === 'string') {
         try { outlineData = JSON.parse(outlineData); } catch (e) { }
     }

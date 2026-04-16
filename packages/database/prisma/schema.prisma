@@ -70,10 +70,11 @@ enum Role {
 
 model Tool {
   id          String       @id @default(cuid())
-  name        String       @unique // e.g., \"Article Generator\"
-  slug        String       @unique // e.g., \"article-generator\"
+  name        String       @unique 
+  slug        String       @unique 
   description String?
   price       Int          @default(1)
+  isActive    Boolean      @default(true) // <-- SENİN SİSTEMİNİN GERÇEĞİ: EKLENDİ
   contentJobs ContentJob[]
 }
 
@@ -83,8 +84,8 @@ model ContentJob {
   toolId        String
   status        JobStatus  @default(PENDING)
   
-  inputData     Json       // Parameters sent to AI
-  outputContent String?    // Resulting text (Markdown/HTML)
+  inputPayload  Json       // <-- "inputData" YERİNE SENİN KODUNDAKİ ORİJİNAL İSME DÖNÜLDÜ
+  outputContent String?    
   
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
