@@ -58,8 +58,20 @@ export async function POST(req: NextRequest) {
 
         const { outlineData, config } = parseResult.data;
 
-        const activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
-        if (!activeTool) throw new Error("No active AI tools found.");
+        let activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
+        
+        if (!activeTool) {
+            console.warn("[DB_WARNING]: No active tools found in DB. Auto-seeding default 'Article Generator'.");
+            activeTool = await prisma.tool.create({
+                data: {
+                    name: "Article Generator",
+                    slug: "article-generator",
+                    description: "Default AI Content Generation Tool",
+                    price: 5,
+                    isActive: true
+                }
+            });
+        }
 
         const contentJob = await prisma.contentJob.create({
             data: {
