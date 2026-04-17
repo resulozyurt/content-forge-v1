@@ -25,6 +25,7 @@ const generationPayloadSchema = z.object({
         sourceUrls: z.array(z.string()).optional().default([]), 
     }),
     config: z.object({
+        contentType: z.string().optional().default("blog_post"),
         language: z.string().optional().default("English (US)"),
         tone: z.string().optional().default("Highly Professional, Data-Driven, Authoritative"),
         depth: z.string().optional().default("Comprehensive"),
@@ -92,28 +93,22 @@ export async function POST(req: NextRequest) {
         const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
         const wordsPerSection = Math.max(80, Math.floor((targetTotalWords - 250) / totalHeadings));
 
-        // --- BRAND ADVOCACY ENGINE ---
+        // --- HARD DIRECTIVE BRAND ADVOCACY ENGINE ---
         let brandContext = "";
         let brandName = "Our Company";
-        let brandDesc = "an industry-leading solution";
 
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
                     brandName = brandProfile.name;
-                    brandDesc = brandProfile.description;
-                    brandContext = `\n[CRITICAL BRAND ADVOCACY DIRECTIVE]:
-You are an elite brand advocate and content strategist for "${brandName}". 
-Core Offering: "${brandDesc}".
-Rules of Engagement:
-1. THE MARKET LEADER: Position "${brandName}" as the undisputed industry standard. Speak with absolute authority about its superiority.
-2. LISTICLES & COMPARISONS: If this heading discusses "Best Tools", "Alternatives", or compares software, "${brandName}" MUST be prominently featured as the #1 highly recommended option. Politely but firmly highlight the flaws of competitors while amplifying the unique value proposition of "${brandName}".
-3. SUBTLE AUTHORITY: For general educational sections, weave "${brandName}" in organically as the ultimate solution to the pain points being discussed. Always use <strong> tags for the brand name.`;
+                    brandContext = `\n[MANDATORY BRAND ADVOCACY]: You are an elite brand advocate for "${brandName}". Core Offering: "${brandProfile.description}". 
+CRITICAL RULES:
+1. YOU MUST seamlessly and organically weave "${brandName}" into this section as the ultimate solution or standard of excellence.
+2. ALWAYS use <strong> tags for the brand name (e.g., <strong>${brandName}</strong>).
+3. If making comparisons, aggressively but professionally highlight the flaws of alternatives while positioning "${brandName}" as the #1 choice.`;
                 }
-            } catch (e) {
-                console.error("[BRAND_PROFILE_FETCH_FAULT]:", e);
-            }
+            } catch (e) {}
         }
 
         const encoder = new TextEncoder();
@@ -160,35 +155,64 @@ Rules of Engagement:
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
 
+                        const targetWords = heading.level === 'h2' ? wordsPerSection + 50 : Math.max(60, wordsPerSection - 20);
+                        
+                        // Define targetKeyword specifically for this loop iteration
                         const targetKeyword = outlineData.selectedKeywords.length > 0 
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        const targetWords = heading.level === 'h2' ? wordsPerSection + 50 : Math.max(60, wordsPerSection - 20);
+                        // --- HARD-LINK INJECTION ALGORITHM ---
+                        let linkStrategyContext = "\n[MANDATORY LINK INJECTION RULES]:\n";
+                        let linkInjected = false;
 
-                        let linkStrategyContext = "";
                         const contextualInternalLinks = availableInternalLinks.slice(i * 2, (i * 2) + 2); 
                         if (contextualInternalLinks.length > 0) {
-                            linkStrategyContext += `\n[INTERNAL LINKING]: You have access to these internal URLs: ${contextualInternalLinks.join(", ")}. IF and ONLY IF one of these conceptually matches the topic of this section, weave it in organically using high-value, descriptive anchor text. Max 1 internal link.`;
+                            linkStrategyContext += `- INTERNAL LINK: You MUST integrate this URL: "${contextualInternalLinks[0]}". Find the MOST semantically relevant phrase in your generated text and wrap it strictly as: <a href="${contextualInternalLinks[0]}">relevant phrase here</a>.\n`;
+                            linkInjected = true;
                         }
 
                         if (availableExternalLinks.length > 0 && i % 3 === 0) { 
                             const externalLink = availableExternalLinks.pop();
-                            linkStrategyContext += `\n[EXTERNAL CITATION]: You may organically insert this external reference ONCE: <a href="${externalLink}" target="_blank" rel="noopener noreferrer">${externalLink}</a>. CRITICAL: Use it strictly as an academic citation.`;
+                            linkStrategyContext += `- EXTERNAL CITATION: You MUST integrate this reference URL: "${externalLink}". Anchor text must be a relevant factual statement or statistic formatted as: <a href="${externalLink}" target="_blank" rel="noopener noreferrer">relevant concept</a>.\n`;
+                            linkInjected = true;
                         }
 
-                        // --- PHASE 3: RICH FORMATTING ENGINE (DYNAMIC STRUCTURES) ---
+                        if (!linkInjected) {
+                            linkStrategyContext = ""; // Clean up if no links available
+                        }
+
+                        // --- CONTENT ARCHETYPES (DINAMIK IÇERIK MOTORU) ---
+                        const archetypePrompts: Record<string, string> = {
+                            'blog_post': "Format this strictly as a highly engaging, scannable Blog Post. Maintain a conversational yet authoritative rhythm.",
+                            'pillar_page': "Format this as an encyclopedic Pillar Page section. Dive deep into the sub-topic. Provide dense, fact-rich value.",
+                            'guide': "Format this as a step-by-step Ultimate Guide. MANDATORY: You must include an actionable checklist or a numbered list (<ol>) in this section.",
+                            'product_review': "Format this as a Product Review section. MANDATORY: If this heading implies comparison or features, you MUST include an HTML <table> comparing pros/cons or specs.",
+                            'service_page': "Format this as a high-converting Service Page. Keep paragraphs extremely short. Focus exclusively on pain points, benefits, and direct solutions. Drive urgency."
+                        };
+                        const selectedArchetype = archetypePrompts[config.contentType] || archetypePrompts['blog_post'];
+
+                        // --- ANTI-AI JARGON & READABILITY ---
+                        const negativePrompt = `\n[NEGATIVE CONSTRAINTS - STRICTLY PROHIBITED]:
+- DO NOT use cliché AI transition words: "In conclusion", "Moreover", "Furthermore", "Delve into", "A testament to", "In the ever-evolving landscape", "Navigating the complexities", "Let's explore".
+- NO WALL OF TEXT: A single paragraph MUST NOT exceed 3 sentences. Break them up.`;
+
+                        // MERGED SYSTEM PROMPT (Combines Phase 3 Rich Formatting with Phase 4 Archetypes)
                         const systemPrompt = `You are an elite Senior SEO Content Architect. Write the highly readable HTML content body for the EXACT heading provided.
 
+[CONTENT TYPE DIRECTIVE]:
+${selectedArchetype}
+
 [MANDATORY RICH ELEMENTS & FORMATTING RULES]:
-1. DO NOT REWRITE THE HEADING. The user has provided the exact heading. You only generate the body content below it.
-2. KILL THE WALL OF TEXT: Break content into short paragraphs (max 2-3 sentences).
-3. DYNAMIC STRUCTURE (CRITICAL): Analyze the heading. 
+1. DO NOT REWRITE THE HEADING ITSELF. Only generate the body content below it.
+2. DYNAMIC STRUCTURE (CRITICAL): Analyze the heading. 
    - IF the heading implies a comparison, vs, pros/cons, or pricing, YOU MUST output a styled HTML <table>.
    - IF the heading implies a process, steps, checklist, or multiple features, YOU MUST output an HTML <ul> or <ol>.
    - IF stating a crucial industry fact or quote, wrap it in a <blockquote>.
-4. EMPHASIS: Bold (<strong>) important entities and concepts.
-5. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~${targetWords} words.
+3. EMPHASIS: Bold (<strong>) important entities, metrics, and core concepts to aid scanning.
+4. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~${targetWords} words.
+
+${negativePrompt}
 ${linkStrategyContext}
 ${brandContext}`;
 
@@ -250,38 +274,30 @@ ${brandContext}`;
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
                         // --- PHASE 4: HIGH-FIDELITY IMAGE ENGINE (DALL-E 3) ---
-                        // Trigger exactly every 2 H2 headings as requested.
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0) {
                             try {
-                                // Step 1: Generate a perfect image prompt using Claude
-                                // Step 1: Generate a perfect image prompt using Claude
-const promptReq = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", 
-    max_tokens: 300,
-    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
-    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
-});
+                                const promptReq = await anthropic.messages.create({
+                                    model: "claude-sonnet-4-6", 
+                                    max_tokens: 300,
+                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
+                                    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
+                                });
 
-// FIX: Safely narrow the union type using a Type Guard before accessing the 'text' property.
-// This prevents Next.js build failures caused by Anthropic SDK's strict union types (ThinkingBlock, ToolUseBlock, etc.)
-const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
-const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
+                                const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
+                                const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
 
-                                // Step 2: Generate the image using OpenAI's DALL-E 3 API
-const imageResponse = await openai.images.generate({
-    model: "dall-e-3",
-    prompt: optimizedPrompt.substring(0, 900),
-    n: 1,
-    size: "1024x1024",
-    quality: "hd",
-    style: "natural" // Forces photographic realism over illustrations
-});
+                                const imageResponse = await openai.images.generate({
+                                    model: "dall-e-3",
+                                    prompt: optimizedPrompt.substring(0, 900),
+                                    n: 1,
+                                    size: "1024x1024",
+                                    quality: "hd",
+                                    style: "natural" 
+                                });
 
-// FIX: Added optional chaining to 'data' to satisfy strict null checks.
-// This prevents runtime crashes if the OpenAI API returns an unexpected payload without the 'data' array.
-const imageUrl = imageResponse.data?.[0]?.url;
+                                const imageUrl = imageResponse.data?.[0]?.url;
 
-if (imageUrl) {
+                                if (imageUrl) {
                                     const imgHtml = `
                                         <figure class="my-10">
                                             <img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" />
@@ -302,7 +318,7 @@ if (imageUrl) {
                     
                     const conclusionPrompt = `Write the final Conclusion and FAQ section for the article. Language: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~300 words.
                     1. Generate a 'Final Verdict' heading (<h2>) summarizing the core value.
-                    2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML blockquote or highly visible paragraph directing them to this exact URL: ${finalInternalLink}.
+                    2. CTA BLOCK: Explicitly invite the reader to try "${brandName}". Create a stylish HTML blockquote or highly visible paragraph directing them to this exact URL: ${finalInternalLink}.
                     3. FAQ SECTION: Generate 3 highly relevant FAQ questions. Use <h3> for the question and a standard paragraph for the answer. Keep answers punchy.`;
 
                     let conclusionHtml = "";
@@ -311,7 +327,6 @@ if (imageUrl) {
                             model: "claude-sonnet-4-6", max_tokens: 1500,
                             system: "You are an elite SEO Architect.",
                             messages: [{ role: "user", content: conclusionPrompt }],
-                            // FIX (BUG-003): Added missing 'description' fields to satisfy Anthropic tool_use contract correctly
                             tools: [{ 
                                 name: "gen_conclusion", 
                                 description: "Generates the final Conclusion and FAQ HTML section for the article.",

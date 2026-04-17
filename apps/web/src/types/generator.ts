@@ -1,13 +1,9 @@
-// apps/web/src/types/generator.ts
-
 export type ContentType = 'blog_post' | 'pillar_page' | 'guide' | 'product_review' | 'service_page';
-
-// FIX 1: Enforced strict model naming based on global rules
 export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o'; 
-
 export type Language = 'en' | 'tr';
 export type ContentDepth = 'standard' | 'comprehensive' | 'exhaustive';
 export type Tone = 'professional' | 'casual' | 'educational' | 'persuasive' | 'authoritative';
+
 
 export interface GeneratorConfigData {
   query: string;
@@ -17,17 +13,23 @@ export interface GeneratorConfigData {
   model: AIModel;
   depth: ContentDepth;
   tone: Tone;
+  targetLength: string;       // ADDED
+  enableBrandVoice: boolean;  // ADDED
   targetAudience: string;
+  wpSitemap?: string;         // ADDED
 }
 
 export const initialConfigData: GeneratorConfigData = {
   query: '',
   contentType: 'blog_post',
   language: 'en',
-  model: 'claude-sonnet-4-6', // Updated to reflect strict rule
+  model: 'claude-sonnet-4-6',
   depth: 'comprehensive',
   tone: 'professional',
+  targetLength: '1000',
+  enableBrandVoice: false,
   targetAudience: '',
+  wpSitemap: ''
 };
 
 export interface CompetitorData {

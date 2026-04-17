@@ -204,17 +204,45 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                     </div>
                 )}
 
+                {/* --- DYNAMIC PRODUCTION BLUEPRINT PREVIEW --- */}
+                <div className="p-6 bg-indigo-50 dark:bg-indigo-900/20 border-t border-indigo-100 dark:border-indigo-800 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                    <div className="flex items-start gap-4">
+                        <div className="p-2 bg-indigo-100 dark:bg-indigo-800 rounded-lg shrink-0 mt-1">
+                            <BrainCircuit className="text-indigo-600 dark:text-indigo-300 w-5 h-5" />
+                        </div>
+                        <div>
+                            <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100 mb-1">
+                                Production Blueprint
+                            </h4>
+                            <p className="text-sm leading-relaxed text-indigo-800 dark:text-indigo-300">
+                                The AI will craft a <strong>~{config.targetLength}-word</strong>{" "}
+                                <span className="underline decoration-indigo-300 underline-offset-2">
+                                    {config.contentType.replace('_', ' ')}
+                                </span>{" "}
+                                in <strong>{config.language === 'en' ? 'English (US)' : 'Turkish'}</strong>, adopting a{" "}
+                                <strong>{config.tone}</strong> tone.
+                                {config.enableBrandVoice ? " It will aggressively advocate for your brand as the premier solution. " : " It will maintain strict neutrality without brand bias. "}
+                                It will enforce <strong>high-readability formatting</strong> (short paragraphs, lists, tables), strictly prohibit generic AI jargon, and seamlessly weave contextual <strong>internal/external links</strong> into the semantic flow.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Action Bar */}
                 <div className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                    <button
-                        type="submit"
-                        disabled={!config.query.trim()}
-                        className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all transform bg-gradient-to-r from-blue-600 to-indigo-600 border border-transparent rounded-xl shadow-md hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02]"
-                    >
-                        <Sparkles className="w-5 h-5 mr-2" />
-                        Start Research Process
-                    </button>
-                </div>
+                    {/* ... existing submit button ... */}
+
+                    {/* Action Bar */}
+                    <div className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 flex justify-end">
+                        <button
+                            type="submit"
+                            disabled={!config.query.trim()}
+                            className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all transform bg-gradient-to-r from-blue-600 to-indigo-600 border border-transparent rounded-xl shadow-md hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02]"
+                        >
+                            <Sparkles className="w-5 h-5 mr-2" />
+                            Start Research Process
+                        </button>
+                    </div>
             </form>
         </div>
     );
