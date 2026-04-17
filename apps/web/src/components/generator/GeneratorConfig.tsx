@@ -34,6 +34,49 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
         onStartResearch(config);
     };
 
+    // --- DYNAMIC BLUEPRINT STRATEGY ENGINE ---
+    const getBlueprintDescription = () => {
+        let strategy = "";
+
+        // 1. Content Type Strategy
+        switch (config.contentType) {
+            case 'blog_post':
+                strategy += "The AI will craft an engaging, top-of-funnel article designed for readability. It will use relatable examples and shorter paragraphs to keep readers hooked. ";
+                break;
+            case 'pillar_page':
+                strategy += "The AI will generate an exhaustive, encyclopedic guide covering all aspects of the topic. Expect high-density information, deep-dive sub-sections, and comprehensive coverage to establish topical SEO authority. ";
+                break;
+            case 'guide':
+                strategy += "The AI will structure the content as a step-by-step masterclass. It will heavily utilize actionable checklists, numbered instructions, and clear 'how-to' formatting. ";
+                break;
+            case 'product_review':
+                strategy += "The AI will critically evaluate the topic using feature breakdowns. It will mandate HTML comparison tables (pros/cons/specs) and structure the narrative to position your brand as the superior choice. ";
+                break;
+            case 'service_page':
+                strategy += "The AI will act as a high-converting sales copywriter. Content will be punchy, laser-focused on customer pain points, and designed to drive immediate action rather than just educating. ";
+                break;
+            default:
+                strategy += "The AI will generate standard article content. ";
+        }
+
+        // 2. Length Strategy
+        const length = parseInt((config as any).targetLength || "1000");
+        if (length >= 1500) {
+            strategy += "Structurally, it will expand heavily on each heading, weaving detailed explanations and multi-paragraph insights to reach a long-form word count. ";
+        } else if (length <= 500) {
+            strategy += "Structurally, it will be extremely concise, getting straight to the point without fluff to maintain a brief reading time. ";
+        }
+
+        // 3. Brand & Tone Strategy
+        if ((config as any).enableBrandVoice) {
+            strategy += `It will adopt a ${config.tone} tone while aggressively integrating your brand. It will natively weave your product into the narrative as the ultimate solution, ensuring internal links are seamlessly injected to guide the user journey.`;
+        } else {
+            strategy += `It will adopt a ${config.tone} tone and maintain strict, objective neutrality. No aggressive brand advocacy will be injected.`;
+        }
+
+        return strategy;
+    };
+
     return (
         <div className="w-full max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="text-center mb-8">
@@ -207,18 +250,11 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             <BrainCircuit className="text-indigo-600 dark:text-indigo-300 w-5 h-5" />
                         </div>
                         <div>
-                            <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100 mb-1">
-                                Production Blueprint
+                            <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100 mb-2">
+                                Production Strategy Blueprint
                             </h4>
                             <p className="text-sm leading-relaxed text-indigo-800 dark:text-indigo-300">
-                                The AI will craft a <strong>~{(config as any).targetLength || "1000"}-word</strong>{" "}
-                                <span className="underline decoration-indigo-300 underline-offset-2 capitalize">
-                                    {config.contentType.replace('_', ' ')}
-                                </span>{" "}
-                                in <strong>{config.language === 'en' ? 'English (US)' : 'Turkish'}</strong>, adopting a{" "}
-                                <strong>{config.tone}</strong> tone.
-                                {(config as any).enableBrandVoice ? " It will aggressively advocate for your brand as the premier solution. " : " It will maintain strict neutrality without brand bias. "}
-                                It will enforce <strong>high-readability formatting</strong> (short paragraphs, lists, tables), strictly prohibit generic AI jargon, and seamlessly weave contextual <strong>internal/external links</strong> into the semantic flow.
+                                {getBlueprintDescription()}
                             </p>
                         </div>
                     </div>

@@ -64,24 +64,12 @@ export async function POST(req: NextRequest) {
         if (!activeTool) {
             console.warn("[DB_WARNING]: No active tools found in DB. Auto-seeding default 'Article Generator'.");
             activeTool = await prisma.tool.create({
-                data: {
-                    name: "Article Generator",
-                    slug: "article-generator",
-                    description: "Default AI Content Generation Tool",
-                    price: 5,
-                    isActive: true
-                }
+                data: { name: "Article Generator", slug: "article-generator", description: "Default AI Content Generation Tool", price: 5, isActive: true }
             });
         }
 
         const contentJob = await prisma.contentJob.create({
-            data: {
-                userId: currentUserId,
-                toolId: activeTool.id,
-                aiModel: "CLAUDE_3_5_SONNET", 
-                status: "PROCESSING",
-                inputPayload: rawBody,
-            }
+            data: { userId: currentUserId, toolId: activeTool.id, aiModel: "CLAUDE_3_5_SONNET", status: "PROCESSING", inputPayload: rawBody }
         });
         currentJobId = contentJob.id;
 
@@ -89,24 +77,15 @@ export async function POST(req: NextRequest) {
         await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
         areCreditsDeducted = true;
 
-        const totalHeadings = outlineData.headings.length;
-        const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
-        const wordsPerSection = Math.max(80, Math.floor((targetTotalWords - 250) / totalHeadings));
-
-        // --- HARD DIRECTIVE BRAND ADVOCACY ENGINE ---
-        let brandContext = "";
-        let brandName = "Our Company";
-
+        // --- FETCH BRAND PROFILE ONCE ---
+        let brandName = "Our Brand";
+        let brandDesc = "The leading industry solution";
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
                     brandName = brandProfile.name;
-                    brandContext = `\n[MANDATORY BRAND ADVOCACY]: You are an elite brand advocate for "${brandName}". Core Offering: "${brandProfile.description}". 
-CRITICAL RULES:
-1. YOU MUST seamlessly and organically weave "${brandName}" into this section as the ultimate solution or standard of excellence.
-2. ALWAYS use <strong> tags for the brand name (e.g., <strong>${brandName}</strong>).
-3. If making comparisons, aggressively but professionally highlight the flaws of alternatives while positioning "${brandName}" as the #1 choice.`;
+                    brandDesc = brandProfile.description || brandDesc;
                 }
             } catch (e) {}
         }
@@ -115,17 +94,11 @@ CRITICAL RULES:
         
         const stream = new ReadableStream({
             async start(controller) {
-                const sendEvent = (data: any) => {
-                    const chunk = `data: ${JSON.stringify(data)}\n\n`;
-                    controller.enqueue(encoder.encode(chunk));
-                };
-                const closeStream = () => {
-                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                    controller.close();
-                };
+                const sendEvent = (data: any) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+                const closeStream = () => { controller.enqueue(encoder.encode("data: [DONE]\n\n")); controller.close(); };
 
                 try {
-                    // --- SEMANTIC LINK POOL INITIALIZATION ---
+                    // --- SMART SITEMAP PARSER (NO XML INDEX FILES) ---
                     let availableInternalLinks: string[] = [];
                     if (config.wpSitemap) {
                         try {
@@ -133,90 +106,92 @@ CRITICAL RULES:
                             if (sitemapRes.ok) {
                                 const sitemapXml = await sitemapRes.text();
                                 const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]);
+                                
+                                // Filter out sitemap index files (.xml) to ensure we only get actual page links
+                                let filteredLinks = matches.filter(url => !url.endsWith('.xml'));
+                                
                                 const isTurkish = config.language.toLowerCase().includes('tr');
-                                let filteredLinks = matches.filter(url => {
+                                filteredLinks = filteredLinks.filter(url => {
                                     if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
                                     else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
                                 });
-                                if (filteredLinks.length === 0) filteredLinks = matches;
+                                
+                                if (filteredLinks.length === 0) filteredLinks = matches.filter(url => !url.endsWith('.xml'));
                                 availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random());
                             }
-                        } catch (e) {
-                            console.error("[SITEMAP_FETCH_FAULT]:", e);
-                        }
+                        } catch (e) { console.error("[SITEMAP_FETCH_FAULT]:", e); }
                     }
-                    let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])].sort(() => 0.5 - Math.random()); 
                     
+                    let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])].sort(() => 0.5 - Math.random()); 
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; 
 
-                    // --- PRIMARY GENERATION LOOP ---
+                    // --- MODULAR PROMPT ENGINE LOOP ---
                     for (let i = 0; i < outlineData.headings.length; i++) {
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
 
-                        const targetWords = heading.level === 'h2' ? wordsPerSection + 50 : Math.max(60, wordsPerSection - 20);
-                        
-                        // Define targetKeyword specifically for this loop iteration
                         const targetKeyword = outlineData.selectedKeywords.length > 0 
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        // --- HARD-LINK INJECTION ALGORITHM ---
-                        let linkStrategyContext = "\n[MANDATORY LINK INJECTION RULES]:\n";
-                        let linkInjected = false;
+                        // 1. MODULE: STRUCTURAL LENGTH LIMITS (No token counting)
+                        const lengthVal = parseInt(config.targetLength || "1000");
+                        let lengthModule = "";
+                        if (lengthVal >= 1500) {
+                            lengthModule = "STRUCTURE RULE: Write at least 4 detailed paragraphs for this section. You MUST include either an HTML <ul> list or an HTML <table> to break up the text and provide deep insights.";
+                        } else if (lengthVal <= 500) {
+                            lengthModule = "STRUCTURE RULE: Keep this section extremely concise. Write ONLY 1 or 2 short paragraphs. Do not add fluff.";
+                        } else {
+                            lengthModule = "STRUCTURE RULE: Write 2 or 3 solid paragraphs. Use <strong> text to highlight key concepts.";
+                        }
 
+                        // 2. MODULE: CONTENT ARCHETYPES
+                        const archetypePrompts: Record<string, string> = {
+                            'blog_post': "Format as an engaging Blog Post. Use conversational transitions.",
+                            'pillar_page': "Format as an encyclopedic Pillar Page. Provide dense, factual value.",
+                            'guide': "Format as a Step-by-Step Guide. If applicable, use numbered <ol> lists.",
+                            'product_review': "Format as a Review. If comparing, you MUST use an HTML <table> for pros/cons.",
+                            'service_page': "Format as a Service Page. Keep paragraphs punchy. Focus on customer pain points."
+                        };
+                        const archetypeModule = archetypePrompts[config.contentType] || archetypePrompts['blog_post'];
+
+                        // 3. MODULE: BRAND ADVOCACY (HARD INJECTION)
+                        let brandModule = "Maintain an objective, neutral stance.";
+                        if (config.enableBrandVoice) {
+                            brandModule = `[CRITICAL BRAND ADVOCACY]: You MUST explicitly mention "<strong>${brandName}</strong>" in this section. Position "${brandName}" (${brandDesc}) as the absolute best and most reliable solution for the problem discussed in this heading. Do NOT recommend competitors.`;
+                        }
+
+                        // 4. MODULE: STRICT LINKING STRATEGY
+                        let linkModule = "[LINKING STRATEGY]:\n";
+                        
+                        // Internal Link Injection
                         const contextualInternalLinks = availableInternalLinks.slice(i * 2, (i * 2) + 2); 
                         if (contextualInternalLinks.length > 0) {
-                            linkStrategyContext += `- INTERNAL LINK: You MUST integrate this URL: "${contextualInternalLinks[0]}". Find the MOST semantically relevant phrase in your generated text and wrap it strictly as: <a href="${contextualInternalLinks[0]}">relevant phrase here</a>.\n`;
-                            linkInjected = true;
+                            linkModule += `- INTERNAL LINK MANDATORY: You MUST integrate this exact URL: "${contextualInternalLinks[0]}". Find the most relevant phrase and wrap it EXACTLY like this: <a href="${contextualInternalLinks[0]}">relevant phrase</a>. This is a strict requirement.\n`;
                         }
 
+                        // External Link Injection (Nofollow + Informational constraint)
                         if (availableExternalLinks.length > 0 && i % 3 === 0) { 
                             const externalLink = availableExternalLinks.pop();
-                            linkStrategyContext += `- EXTERNAL CITATION: You MUST integrate this reference URL: "${externalLink}". Anchor text must be a relevant factual statement or statistic formatted as: <a href="${externalLink}" target="_blank" rel="noopener noreferrer">relevant concept</a>.\n`;
-                            linkInjected = true;
+                            linkModule += `- EXTERNAL LINK (OPTIONAL & SAFE): You may use this URL as a citation: "${externalLink}". IF you use it, you MUST use rel="nofollow" target="_blank". DO NOT link to this URL if it looks like a competitor's pricing or service page. Only use it if citing a statistic, study, or blog post.\n`;
                         }
 
-                        if (!linkInjected) {
-                            linkStrategyContext = ""; // Clean up if no links available
-                        }
+                        // 5. MODULE: ANTI-AI JARGON
+                        const negativeModule = `[NEGATIVE CONSTRAINTS]: NEVER use cliché AI words like: "In conclusion", "Moreover", "Furthermore", "Delve into", "A testament to", "Navigating the complexities". Break any paragraph longer than 3 sentences.`;
 
-                        // --- CONTENT ARCHETYPES (DINAMIK IÇERIK MOTORU) ---
-                        const archetypePrompts: Record<string, string> = {
-                            'blog_post': "Format this strictly as a highly engaging, scannable Blog Post. Maintain a conversational yet authoritative rhythm.",
-                            'pillar_page': "Format this as an encyclopedic Pillar Page section. Dive deep into the sub-topic. Provide dense, fact-rich value.",
-                            'guide': "Format this as a step-by-step Ultimate Guide. MANDATORY: You must include an actionable checklist or a numbered list (<ol>) in this section.",
-                            'product_review': "Format this as a Product Review section. MANDATORY: If this heading implies comparison or features, you MUST include an HTML <table> comparing pros/cons or specs.",
-                            'service_page': "Format this as a high-converting Service Page. Keep paragraphs extremely short. Focus exclusively on pain points, benefits, and direct solutions. Drive urgency."
-                        };
-                        const selectedArchetype = archetypePrompts[config.contentType] || archetypePrompts['blog_post'];
+                        // --- ASSEMBLE MASTER PROMPT ---
+                        const systemPrompt = `You are an elite Senior SEO Content Architect. Write ONLY the HTML body content for the provided heading. Do NOT output the heading tag itself.
 
-                        // --- ANTI-AI JARGON & READABILITY ---
-                        const negativePrompt = `\n[NEGATIVE CONSTRAINTS - STRICTLY PROHIBITED]:
-- DO NOT use cliché AI transition words: "In conclusion", "Moreover", "Furthermore", "Delve into", "A testament to", "In the ever-evolving landscape", "Navigating the complexities", "Let's explore".
-- NO WALL OF TEXT: A single paragraph MUST NOT exceed 3 sentences. Break them up.`;
+${archetypeModule}
+${lengthModule}
+LANGUAGE: EXACTLY ${config.language}. TONE: ${config.tone}.
 
-                        // MERGED SYSTEM PROMPT (Combines Phase 3 Rich Formatting with Phase 4 Archetypes)
-                        const systemPrompt = `You are an elite Senior SEO Content Architect. Write the highly readable HTML content body for the EXACT heading provided.
+${brandModule}
+${linkModule}
+${negativeModule}`;
 
-[CONTENT TYPE DIRECTIVE]:
-${selectedArchetype}
-
-[MANDATORY RICH ELEMENTS & FORMATTING RULES]:
-1. DO NOT REWRITE THE HEADING ITSELF. Only generate the body content below it.
-2. DYNAMIC STRUCTURE (CRITICAL): Analyze the heading. 
-   - IF the heading implies a comparison, vs, pros/cons, or pricing, YOU MUST output a styled HTML <table>.
-   - IF the heading implies a process, steps, checklist, or multiple features, YOU MUST output an HTML <ul> or <ol>.
-   - IF stating a crucial industry fact or quote, wrap it in a <blockquote>.
-3. EMPHASIS: Bold (<strong>) important entities, metrics, and core concepts to aid scanning.
-4. LANGUAGE: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~${targetWords} words.
-
-${negativePrompt}
-${linkStrategyContext}
-${brandContext}`;
-
-                        const userMessage = `Write the highly readable HTML content body for the heading: "${heading.text}"\nTarget Keyword: "${targetKeyword}"`;
+                        const userMessage = `Write the highly readable HTML content body for the heading: "${heading.text}"\nTarget Keyword Context: "${targetKeyword}"`;
                         
                         let finalHeadingText = heading.text; 
                         let generatedText = "";
@@ -224,27 +199,14 @@ ${brandContext}`;
                         try {
                             if (config.engine.toLowerCase().includes("claude")) {
                                 const anthropicResponse = await anthropic.messages.create({
-                                    model: "claude-sonnet-4-6",
-                                    max_tokens: 4096,
-                                    system: systemPrompt,
+                                    model: "claude-sonnet-4-6", max_tokens: 4096, system: systemPrompt,
                                     messages: [{ role: "user", content: userMessage }],
-                                    tools: [
-                                        {
-                                            name: "generate_html_body",
-                                            description: "Generates the formatted HTML content for the section. Do NOT output the heading tag itself.",
-                                            input_schema: {
-                                                type: "object",
-                                                properties: {
-                                                    htmlContent: { type: "string", description: "The HTML content (paragraphs, lists, tables, blockquotes)." }
-                                                },
-                                                required: ["htmlContent"]
-                                            }
-                                        }
-                                    ],
-                                    tool_choice: { type: "tool", name: "generate_html_body" },
-                                    temperature: 0.6,
+                                    tools: [{
+                                        name: "generate_html_body", description: "Generates the formatted HTML content for the section.",
+                                        input_schema: { type: "object", properties: { htmlContent: { type: "string" } }, required: ["htmlContent"] }
+                                    }],
+                                    tool_choice: { type: "tool", name: "generate_html_body" }, temperature: 0.6,
                                 });
-                                
                                 const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                                 if (toolUseBlock) {
                                     const parsedData: any = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
@@ -252,20 +214,16 @@ ${brandContext}`;
                                 }
                             } else {
                                 const textCompletion = await openai.chat.completions.create({
-                                    model: "gpt-4o",
-                                    response_format: { type: "json_object" },
+                                    model: "gpt-4o", response_format: { type: "json_object" },
                                     messages: [
                                         { role: "system", content: systemPrompt + `\n\nOutput ONLY a JSON object: { "htmlContent": "..." }` },
                                         { role: "user", content: userMessage }
-                                    ],
-                                    temperature: 0.6,
+                                    ], temperature: 0.6,
                                 });
                                 const parsedData = JSON.parse(textCompletion.choices[0].message.content || "{}");
                                 generatedText = parsedData.htmlContent || "";
                             }
-                        } catch (parseError) {
-                            console.error("[PARSE_FAULT]", parseError);
-                        }
+                        } catch (parseError) { console.error("[PARSE_FAULT]", parseError); }
 
                         generatedText = generatedText.replace(/```html|```/g, '').trim();
                         fullGeneratedHtml += `<${heading.level}>${finalHeadingText}</${heading.level}>\n${generatedText}\n`;
@@ -273,37 +231,23 @@ ${brandContext}`;
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        // --- PHASE 4: HIGH-FIDELITY IMAGE ENGINE (DALL-E 3) ---
+                        // --- IMAGE ENGINE (DALL-E 3) ---
                         if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0) {
                             try {
                                 const promptReq = await anthropic.messages.create({
-                                    model: "claude-sonnet-4-6", 
-                                    max_tokens: 300,
-                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic, ultra-high-definition corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography, cinematic lighting, diverse real humans in professional settings. Limit: 800 characters.`,
+                                    model: "claude-sonnet-4-6", max_tokens: 300,
+                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography. Limit: 800 characters.`,
                                     messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
                                 });
-
                                 const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
-                                const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, ultra high definition, DSLR, cinematic lighting, no text`;
+                                const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, DSLR, no text`;
 
                                 const imageResponse = await openai.images.generate({
-                                    model: "dall-e-3",
-                                    prompt: optimizedPrompt.substring(0, 900),
-                                    n: 1,
-                                    size: "1024x1024",
-                                    quality: "hd",
-                                    style: "natural" 
+                                    model: "dall-e-3", prompt: optimizedPrompt.substring(0, 900), n: 1, size: "1024x1024", quality: "hd", style: "natural" 
                                 });
-
                                 const imageUrl = imageResponse.data?.[0]?.url;
-
                                 if (imageUrl) {
-                                    const imgHtml = `
-                                        <figure class="my-10">
-                                            <img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" />
-                                            <figcaption class="text-center text-sm text-gray-500 mt-3 italic">${finalHeadingText}</figcaption>
-                                        </figure>
-                                    `;
+                                    const imgHtml = `<figure class="my-10"><img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${finalHeadingText}</figcaption></figure>`;
                                     fullGeneratedHtml += `${imgHtml}\n`; 
                                     sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
                                 }
@@ -311,71 +255,39 @@ ${brandContext}`;
                         }
                     }
 
-                    // --- AUTOMATIC FAQ & CONCLUSION WITH CTA ---
+                    // --- CONCLUSION WITH CTA ---
                     sendEvent({ id: `h-faq-${Date.now()}`, type: 'h2', content: "Conclusion & Frequently Asked Questions" });
-                    
                     const finalInternalLink = availableInternalLinks.length > 0 ? availableInternalLinks[0] : "#";
-                    
-                    const conclusionPrompt = `Write the final Conclusion and FAQ section for the article. Language: EXACTLY ${config.language}. Tone: ${config.tone}. Target Word Count: ~300 words.
-                    1. Generate a 'Final Verdict' heading (<h2>) summarizing the core value.
-                    2. CTA BLOCK: Explicitly invite the reader to try "${brandName}". Create a stylish HTML blockquote or highly visible paragraph directing them to this exact URL: ${finalInternalLink}.
-                    3. FAQ SECTION: Generate 3 highly relevant FAQ questions. Use <h3> for the question and a standard paragraph for the answer. Keep answers punchy.`;
+                    const conclusionPrompt = `Write the final Conclusion and FAQ section. Language: EXACTLY ${config.language}. Tone: ${config.tone}.
+1. Generate a 'Final Verdict' heading (<h2>).
+2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish blockquote directing them to: ${finalInternalLink}.
+3. FAQ SECTION: Generate 3 punchy FAQ questions (<h3>).`;
 
                     let conclusionHtml = "";
                     try {
                         const conclusionRes = await anthropic.messages.create({
-                            model: "claude-sonnet-4-6", max_tokens: 1500,
-                            system: "You are an elite SEO Architect.",
+                            model: "claude-sonnet-4-6", max_tokens: 1500, system: "You are an elite SEO Architect.",
                             messages: [{ role: "user", content: conclusionPrompt }],
-                            tools: [{ 
-                                name: "gen_conclusion", 
-                                description: "Generates the final Conclusion and FAQ HTML section for the article.",
-                                input_schema: { 
-                                    type: "object", 
-                                    properties: { 
-                                        htmlContent: { 
-                                            type: "string",
-                                            description: "The formatted HTML content containing the final verdict, CTA, and FAQs."
-                                        } 
-                                    }, 
-                                    required: ["htmlContent"] 
-                                } 
-                            }],
-                            tool_choice: { type: "tool", name: "gen_conclusion" },
-                            temperature: 0.6
+                            tools: [{ name: "gen_conclusion", description: "Generates HTML Conclusion.", input_schema: { type: "object", properties: { htmlContent: { type: "string" } }, required: ["htmlContent"] } }],
+                            tool_choice: { type: "tool", name: "gen_conclusion" }, temperature: 0.6
                         });
                         const toolUseBlock = conclusionRes.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                         const parsedData: any = toolUseBlock ? (typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input) : {};
                         conclusionHtml = (parsedData.htmlContent || "").replace(/```html|```/g, '').trim();
-                        
                         fullGeneratedHtml += `\n${conclusionHtml}\n`;
                         sendEvent({ id: `p-faq-${Date.now()}`, type: 'paragraph', content: conclusionHtml });
-                    } catch (e) {
-                        console.error("[CONCLUSION_GEN_FAULT]:", e);
-                    }
+                    } catch (e) { console.error("[CONCLUSION_GEN_FAULT]:", e); }
 
-                    // --- SEO METADATA GENERATION ---
+                    // --- SEO METADATA ---
                     let finalSeoMetadata = null;
                     try {
                         const contentSample = fullGeneratedHtml.substring(0, 5000); 
                         const seoResponse = await anthropic.messages.create({
-                            model: "claude-sonnet-4-6",
-                            max_tokens: 500,
-                            system: `Generate Rank Math metadata. Language: ${config.language}.`,
-                            messages: [{ role: "user", content: `Analyze this content:\n\n${contentSample}` }],
-                            tools: [{
-                                name: "set_rank_math_metadata",
-                                description: "Outputs strict Rank Math metadata.",
-                                input_schema: {
-                                    type: "object",
-                                    properties: { focusKeyword: { type: "string" }, metaTitle: { type: "string" }, metaDescription: { type: "string" } },
-                                    required: ["focusKeyword", "metaTitle", "metaDescription"]
-                                }
-                            }],
-                            tool_choice: { type: "tool", name: "set_rank_math_metadata" },
-                            temperature: 0.3,
+                            model: "claude-sonnet-4-6", max_tokens: 500, system: `Generate Rank Math metadata. Language: ${config.language}.`,
+                            messages: [{ role: "user", content: `Analyze this:\n\n${contentSample}` }],
+                            tools: [{ name: "set_rank_math", description: "Outputs SEO metadata.", input_schema: { type: "object", properties: { focusKeyword: { type: "string" }, metaTitle: { type: "string" }, metaDescription: { type: "string" } }, required: ["focusKeyword", "metaTitle", "metaDescription"] } }],
+                            tool_choice: { type: "tool", name: "set_rank_math" }, temperature: 0.3,
                         });
-
                         const seoBlock = seoResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
                         if (seoBlock) {
                             finalSeoMetadata = typeof seoBlock.input === 'string' ? JSON.parse(seoBlock.input) : seoBlock.input;
@@ -383,11 +295,7 @@ ${brandContext}`;
                         }
                     } catch (e) {}
 
-                    await prisma.contentJob.update({
-                        where: { id: currentJobId! },
-                        data: { status: "COMPLETED", outputContent: fullGeneratedHtml, seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined }
-                    });
-
+                    await prisma.contentJob.update({ where: { id: currentJobId! }, data: { status: "COMPLETED", outputContent: fullGeneratedHtml, seoMetadata: finalSeoMetadata ? finalSeoMetadata : undefined } });
                     closeStream();
 
                 } catch (streamError) {
@@ -407,9 +315,7 @@ ${brandContext}`;
                 await prisma.transaction.create({ data: { userId: currentUserId, amount: ARTICLE_COST, type: "REFUND", description: "System Fault" } });
                 await prisma.wallet.update({ where: { userId: currentUserId }, data: { creditsAvailable: { increment: ARTICLE_COST } } });
                 await prisma.contentJob.update({ where: { id: currentJobId }, data: { status: "FAILED" } });
-            } catch (e) {
-                console.error("[REFUND_FAULT]:", e);
-            }
+            } catch (e) {}
         }
         return new Response(JSON.stringify({ message: "A critical error occurred." }), { status: 500 });
     }
