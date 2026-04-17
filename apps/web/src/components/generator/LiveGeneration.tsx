@@ -8,7 +8,7 @@ import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 import DOMPurify from "isomorphic-dompurify";
 
 interface LiveGenerationProps {
-    outlineData: FinalOutlineData;
+    outlineData: FinalOutlineData & { config?: any }; // Added config to the type locally to handle the dynamic pass
     onComplete: (blocks: GeneratedBlock[]) => void;
 }
 
@@ -41,12 +41,15 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                 abortControllerRef.current = new AbortController();
 
+                // FIX (BUG-001 & BUG-006): Map user configuration dynamically instead of hardcoding
                 const sanitizedConfig = {
-                    language: "English (US)",
-                    tone: "Highly Professional, Data-Driven, Authoritative",
-                    depth: "Comprehensive",
-                    engine: "gpt-4o",
-                    wpSitemap: ""
+                    language: outlineData.config?.language || "English (US)",
+                    tone: outlineData.config?.tone || "Highly Professional, Data-Driven, Authoritative",
+                    depth: outlineData.config?.depth || "Comprehensive",
+                    engine: outlineData.config?.engine || "claude-sonnet-4-6",
+                    wpSitemap: outlineData.config?.wpSitemap || "",
+                    targetLength: outlineData.config?.targetLength || "1000",
+                    enableBrandVoice: outlineData.config?.enableBrandVoice || false
                 };
 
                 const response = await fetch('/api/generate/article', {
@@ -77,17 +80,27 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 let processedBlocksCount = 0;
                 const estimatedTotalBlocks = (outlineData.headings?.length || 5) * 2;
 
+                // FIX (BUG-004): Introduce a buffer to accumulate fragmented chunks across network reads
+                let streamBuffer = "";
+
                 while (!done) {
                     const { value, done: readerDone } = await reader.read();
                     done = readerDone;
 
                     if (value) {
                         const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split("\n\n");
+                        streamBuffer += chunk;
 
-                        for (const line of lines) {
-                            if (line.startsWith("data: ")) {
-                                const dataStr = line.replace("data: ", "").trim();
+                        // Split by double newline which dictates the end of a valid SSE event
+                        const messages = streamBuffer.split("\n\n");
+
+                        // The last element is either an empty string (if it ended exactly with \n\n) 
+                        // or a partial fragment. We keep it in the buffer for the next read.
+                        streamBuffer = messages.pop() || "";
+
+                        for (const message of messages) {
+                            if (message.startsWith("data: ")) {
+                                const dataStr = message.replace("data: ", "").trim();
 
                                 if (dataStr === "[DONE]") {
                                     if (isMounted) {
@@ -122,7 +135,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                         setProgress(currentProgress);
                                     }
                                 } catch (e) {
-                                    // Fragmented chunk, safely ignore
+                                    console.warn("Failed to parse JSON block in stream, skipping fragment.", e);
                                 }
                             }
                         }

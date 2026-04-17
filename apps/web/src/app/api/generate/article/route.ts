@@ -299,7 +299,21 @@ if (imageUrl) {
                             model: "claude-sonnet-4-6", max_tokens: 1500,
                             system: "You are an elite SEO Architect.",
                             messages: [{ role: "user", content: conclusionPrompt }],
-                            tools: [{ name: "gen_conclusion", input_schema: { type: "object", properties: { htmlContent: { type: "string" } }, required: ["htmlContent"] } }],
+                            // FIX (BUG-003): Added missing 'description' fields to satisfy Anthropic tool_use contract correctly
+                            tools: [{ 
+                                name: "gen_conclusion", 
+                                description: "Generates the final Conclusion and FAQ HTML section for the article.",
+                                input_schema: { 
+                                    type: "object", 
+                                    properties: { 
+                                        htmlContent: { 
+                                            type: "string",
+                                            description: "The formatted HTML content containing the final verdict, CTA, and FAQs."
+                                        } 
+                                    }, 
+                                    required: ["htmlContent"] 
+                                } 
+                            }],
                             tool_choice: { type: "tool", name: "gen_conclusion" },
                             temperature: 0.6
                         });
@@ -309,7 +323,9 @@ if (imageUrl) {
                         
                         fullGeneratedHtml += `\n${conclusionHtml}\n`;
                         sendEvent({ id: `p-faq-${Date.now()}`, type: 'paragraph', content: conclusionHtml });
-                    } catch (e) {}
+                    } catch (e) {
+                        console.error("[CONCLUSION_GEN_FAULT]:", e);
+                    }
 
                     // --- SEO METADATA GENERATION ---
                     let finalSeoMetadata = null;
