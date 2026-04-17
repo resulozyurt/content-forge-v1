@@ -12,14 +12,12 @@ interface GeneratorConfigProps {
 }
 
 export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProps) {
-    // 1. Hook to read URL parameters sent from Keyword Lab bridge
     const searchParams = useSearchParams();
     const prefilledTopic = searchParams.get("topic") || "";
 
-    // 2. Inject the prefilled topic directly into the initial state
     const [config, setConfig] = useState<GeneratorConfigData>({
         ...initialConfigData,
-        query: prefilledTopic, // <-- PRE-FILL MAGIC HAPPENS HERE
+        query: prefilledTopic,
         targetLength: "1000",
         enableBrandVoice: true
     } as any);
@@ -79,7 +77,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             onChange={(e) => updateConfig('query', e.target.value)}
                             placeholder="e.g. best project management software for agencies"
                             className="block w-full pl-12 pr-4 py-4 text-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                            autoFocus={!prefilledTopic} // Only autofocus if it's empty, otherwise user can just click Start
+                            autoFocus={!prefilledTopic}
                             required
                         />
                     </div>
@@ -99,7 +97,6 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                 {/* Advanced Settings Panel */}
                 {showAdvanced && (
                     <div className="p-6 sm:p-8 bg-gray-50/50 dark:bg-gray-800/10 grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-2 duration-300">
-
                         {/* AI Model */}
                         <div className="space-y-2">
                             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
@@ -115,7 +112,7 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             </select>
                         </div>
 
-                        {/* Target Length (Word Count Guardrails) */}
+                        {/* Target Length */}
                         <div className="space-y-2">
                             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
                                 <AlignLeft className="w-4 h-4 text-teal-500" /> Target Word Count
@@ -200,7 +197,6 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                                 <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-indigo-600"></div>
                             </label>
                         </div>
-
                     </div>
                 )}
 
@@ -215,13 +211,13 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                                 Production Blueprint
                             </h4>
                             <p className="text-sm leading-relaxed text-indigo-800 dark:text-indigo-300">
-                                The AI will craft a <strong>~{config.targetLength}-word</strong>{" "}
-                                <span className="underline decoration-indigo-300 underline-offset-2">
+                                The AI will craft a <strong>~{(config as any).targetLength || "1000"}-word</strong>{" "}
+                                <span className="underline decoration-indigo-300 underline-offset-2 capitalize">
                                     {config.contentType.replace('_', ' ')}
                                 </span>{" "}
                                 in <strong>{config.language === 'en' ? 'English (US)' : 'Turkish'}</strong>, adopting a{" "}
                                 <strong>{config.tone}</strong> tone.
-                                {config.enableBrandVoice ? " It will aggressively advocate for your brand as the premier solution. " : " It will maintain strict neutrality without brand bias. "}
+                                {(config as any).enableBrandVoice ? " It will aggressively advocate for your brand as the premier solution. " : " It will maintain strict neutrality without brand bias. "}
                                 It will enforce <strong>high-readability formatting</strong> (short paragraphs, lists, tables), strictly prohibit generic AI jargon, and seamlessly weave contextual <strong>internal/external links</strong> into the semantic flow.
                             </p>
                         </div>
@@ -230,19 +226,15 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
 
                 {/* Action Bar */}
                 <div className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                    {/* ... existing submit button ... */}
-
-                    {/* Action Bar */}
-                    <div className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                        <button
-                            type="submit"
-                            disabled={!config.query.trim()}
-                            className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all transform bg-gradient-to-r from-blue-600 to-indigo-600 border border-transparent rounded-xl shadow-md hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02]"
-                        >
-                            <Sparkles className="w-5 h-5 mr-2" />
-                            Start Research Process
-                        </button>
-                    </div>
+                    <button
+                        type="submit"
+                        disabled={!config.query.trim()}
+                        className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all transform bg-gradient-to-r from-blue-600 to-indigo-600 border border-transparent rounded-xl shadow-md hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02]"
+                    >
+                        <Sparkles className="w-5 h-5 mr-2" />
+                        Start Research Process
+                    </button>
+                </div>
             </form>
         </div>
     );
