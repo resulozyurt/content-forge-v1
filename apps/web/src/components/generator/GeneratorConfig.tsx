@@ -1,7 +1,7 @@
 // apps/web/src/components/generator/GeneratorConfig.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,24 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
     } as any);
 
     const [showAdvanced, setShowAdvanced] = useState(false);
+
+    // FIX: Auto-load brand profile on mount to populate wpSitemap into config
+    useEffect(() => {
+        const loadBrandProfile = async () => {
+            try {
+                const res = await fetch('/api/user/brand');
+                if (res.ok) {
+                    const { data } = await res.json();
+                    if (data?.sitemapUrl) {
+                        setConfig(prev => ({ ...prev, wpSitemap: data.sitemapUrl }));
+                    }
+                }
+            } catch (e) {
+                // Silent fail — brand profile is optional
+            }
+        };
+        loadBrandProfile();
+    }, []);
 
     const updateConfig = (field: string, value: any) => {
         setConfig((prev) => ({ ...prev, [field]: value }));

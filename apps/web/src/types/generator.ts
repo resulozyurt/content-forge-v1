@@ -59,6 +59,7 @@ export interface FinalOutlineData {
   headings: OutlineHeading[];
   selectedKeywords: string[];
   sourceUrls?: string[];
+  config?: GeneratorConfigData; // FIX: Carry config (enableBrandVoice, wpSitemap, etc.) through to LiveGeneration
 }
 
 // FIX 2: Added 'seo_metadata' to the union type to resolve strict type checking fault

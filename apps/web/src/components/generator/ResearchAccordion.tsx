@@ -26,6 +26,9 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
     const [data, setData] = useState<ResearchResultData | null>(null);
 
     // Execute the backend research pipeline and ingest the standardized payload
+    // FIX: Use config.query as dependency (stable primitive) instead of the config object reference,
+    // which changes on every render and causes the research API to be called twice.
+    const stableQuery = config.query || config.topic || "Default Topic";
     useEffect(() => {
         let isMounted = true;
 
@@ -35,7 +38,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        topic: config.query || config.topic || "Default Topic",
+                        topic: stableQuery,
                         config: config
                     })
                 });
@@ -80,7 +83,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
 
         performResearch();
         return () => { isMounted = false; };
-    }, [config]);
+    }, [stableQuery]); // FIX: stable primitive instead of object reference
 
     // Orchestrate the visual progression timer synced with API data availability
     useEffect(() => {

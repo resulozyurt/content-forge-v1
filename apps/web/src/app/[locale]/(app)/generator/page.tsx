@@ -67,6 +67,7 @@ export default function GeneratorPage() {
                 <div className="pt-8">
                     <OutlineBuilder
                         researchData={researchData}
+                        activeConfig={activeConfig}
                         onGenerateArticle={handleGenerateArticle}
                     />
                 </div>

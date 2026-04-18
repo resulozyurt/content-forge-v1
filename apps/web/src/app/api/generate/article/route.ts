@@ -33,7 +33,7 @@ const generationPayloadSchema = z.object({
         wpSitemap: z.string().optional().default(""),
         targetLength: z.string().optional().default("1000"), 
         enableBrandVoice: z.boolean().optional().default(false) 
-    })
+    }).passthrough()
 });
 
 export async function POST(req: NextRequest) {
@@ -52,19 +52,23 @@ export async function POST(req: NextRequest) {
 
         if (!limiter.success) return new Response(JSON.stringify({ message: "Generation quota reached." }), { status: 429 });
 
-        const rawBody = await req.json();
-        const parseResult = generationPayloadSchema.safeParse(rawBody);
+        let rawBody;
+        try {
+            rawBody = await req.json();
+        } catch (parseErr) {
+            console.warn("⚠️ [API_ABORT] Istemci veri paketini yuklemeden baglantiyi kesti. Islem iptal edildi.");
+            return new Response(JSON.stringify({ message: "Request aborted by client." }), { status: 499 });
+        }
 
+        const parseResult = generationPayloadSchema.safeParse(rawBody);
         if (!parseResult.success) return new Response(JSON.stringify({ message: "Invalid payload." }), { status: 400 });
 
         const { outlineData, config } = parseResult.data;
 
         let activeTool = await prisma.tool.findFirst({ where: { isActive: true } });
-        
         if (!activeTool) {
-            console.warn("[DB_WARNING]: No active tools found in DB. Auto-seeding default 'Article Generator'.");
             activeTool = await prisma.tool.create({
-                data: { name: "Article Generator", slug: "article-generator", description: "Default AI Content Generation Tool", price: 5, isActive: true }
+                data: { name: "Article Generator", slug: "article-generator", description: "Default AI Tool", price: 5, isActive: true }
             });
         }
 
@@ -77,76 +81,118 @@ export async function POST(req: NextRequest) {
         await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
         areCreditsDeducted = true;
 
-        // --- FETCH BRAND PROFILE ONCE ---
-        let brandName = "Our Brand";
+        // === FIX 1: BRAND DESC REFERENCE HATASI ÇÖZÜLDÜ (GLOBAL TANIMLANDI) ===
+        let brandName = "Our Company";
         let brandDesc = "The leading industry solution";
+        let activeSitemapUrl = config.wpSitemap || "";
+
+        if (activeSitemapUrl && !activeSitemapUrl.includes('.xml')) {
+            activeSitemapUrl = activeSitemapUrl.replace(/\/$/, '') + '/sitemap_index.xml'; 
+        }
+
         if (config.enableBrandVoice) {
             try {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
-                    brandName = brandProfile.name;
-                    brandDesc = brandProfile.description || brandDesc;
+                    brandName = brandProfile.name || brandName;
+                    brandDesc = brandProfile.description || brandDesc; // const KALDIRILDI!
+                    
+                    const dbSitemap = (brandProfile as any).sitemapUrl || (brandProfile as any).sitemap || (brandProfile as any).website;
+                    if (!activeSitemapUrl && dbSitemap) {
+                        activeSitemapUrl = dbSitemap;
+                        if (!activeSitemapUrl.includes('.xml')) {
+                            activeSitemapUrl = activeSitemapUrl.replace(/\/$/, '') + '/sitemap_index.xml'; 
+                        }
+                    }
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error("[DB_BRAND_FETCH_ERROR]:", e);
+            }
         }
 
         const encoder = new TextEncoder();
         
         const stream = new ReadableStream({
             async start(controller) {
-                const sendEvent = (data: any) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-                const closeStream = () => { controller.enqueue(encoder.encode("data: [DONE]\n\n")); controller.close(); };
+                let isStreamClosed = false;
+                const sendEvent = (data: any) => {
+                    if (isStreamClosed || req.signal.aborted) return;
+                    try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)); } catch (e) { isStreamClosed = true; }
+                };
+                const closeStream = () => {
+                    if (isStreamClosed || req.signal.aborted) return;
+                    try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); controller.close(); } catch (e) {}
+                    isStreamClosed = true;
+                };
+
+                sendEvent({ 
+                    id: `sys-ping-${Date.now()}`, 
+                    type: 'paragraph', 
+                    content: `<em><span style="color: #6366f1;">[System] Secure connection established. Initializing AI pipeline...</span></em>` 
+                });
 
                 try {
-                    // --- SMART SITEMAP PARSER (NO XML INDEX FILES) ---
                     let availableInternalLinks: string[] = [];
-                    if (config.wpSitemap) {
+                    if (activeSitemapUrl) {
+                        sendEvent({ id: `sys-map-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #6366f1;">[System] Scanning sitemap: ${activeSitemapUrl}...</span></em>` });
                         try {
-                            const sitemapRes = await fetch(config.wpSitemap, { signal: AbortSignal.timeout(8000) });
+                            const sitemapRes = await fetch(activeSitemapUrl, { signal: AbortSignal.timeout(8000) });
                             if (sitemapRes.ok) {
                                 const sitemapXml = await sitemapRes.text();
                                 const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]);
-                                
-                                // Filter out sitemap index files (.xml) to ensure we only get actual page links
                                 let filteredLinks = matches.filter(url => !url.endsWith('.xml'));
-                                
                                 const isTurkish = config.language.toLowerCase().includes('tr');
                                 filteredLinks = filteredLinks.filter(url => {
                                     if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
                                     else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
                                 });
-                                
                                 if (filteredLinks.length === 0) filteredLinks = matches.filter(url => !url.endsWith('.xml'));
                                 availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random());
                             }
                         } catch (e) { console.error("[SITEMAP_FETCH_FAULT]:", e); }
                     }
+
+                    sendEvent({ id: `sys-start-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #6366f1;">[System] Booting ${config.engine} engine. Generating architecture...</span></em>` });
                     
                     let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])].sort(() => 0.5 - Math.random()); 
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; 
+                    let internalLinksInjected = 0; // === FIX 3: İÇ LİNK SAYACI EKLENDİ ===
 
-                    // --- MODULAR PROMPT ENGINE LOOP ---
+                    const totalHeadings = outlineData.headings.length;
+                    const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
+                    const wordsPerSection = Math.max(80, Math.floor((targetTotalWords - 250) / totalHeadings));
+
                     for (let i = 0; i < outlineData.headings.length; i++) {
+                        if (isStreamClosed || req.signal.aborted) break;
+
                         const heading = outlineData.headings[i];
                         if (heading.level === 'h2') h2Counter++;
 
+                        const targetWords = heading.level === 'h2' ? wordsPerSection + 50 : Math.max(60, wordsPerSection - 20);
                         const targetKeyword = outlineData.selectedKeywords.length > 0 
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        // 1. MODULE: STRUCTURAL LENGTH LIMITS (No token counting)
-                        const lengthVal = parseInt(config.targetLength || "1000");
-                        let lengthModule = "";
-                        if (lengthVal >= 1500) {
-                            lengthModule = "STRUCTURE RULE: Write at least 4 detailed paragraphs for this section. You MUST include either an HTML <ul> list or an HTML <table> to break up the text and provide deep insights.";
-                        } else if (lengthVal <= 500) {
-                            lengthModule = "STRUCTURE RULE: Keep this section extremely concise. Write ONLY 1 or 2 short paragraphs. Do not add fluff.";
-                        } else {
-                            lengthModule = "STRUCTURE RULE: Write 2 or 3 solid paragraphs. Use <strong> text to highlight key concepts.";
+                        // === FIX 3: MAKSİMUM 5 İÇ LİNK STRATEJİSİ ===
+                        let linkStrategyContext = "\n[MANDATORY LINK INJECTION RULES]:\n";
+                        let linkInjected = false;
+
+                        if (availableInternalLinks.length > 0 && internalLinksInjected < 5 && (i % 2 === 0 || i === 0)) {
+                            const internalLink = availableInternalLinks.pop();
+                            linkStrategyContext += `- INTERNAL LINK MANDATORY: You MUST integrate this URL exactly once: "${internalLink}". Find a highly relevant 2-3 word phrase and wrap it as: <a href="${internalLink}">phrase</a>.\n`;
+                            linkInjected = true;
+                            internalLinksInjected++;
                         }
 
-                        // 2. MODULE: CONTENT ARCHETYPES
+                        if (availableExternalLinks.length > 0 && i % 3 === 0) { 
+                            const externalLink = availableExternalLinks.pop();
+                            linkStrategyContext += `- EXTERNAL LINK (OPTIONAL & SAFE): You may use this URL as a citation: "${externalLink}". IF you use it, you MUST use rel="nofollow" target="_blank". DO NOT link to competitor pricing pages.\n`;
+                            linkInjected = true;
+                        }
+
+                        if (!linkInjected) linkStrategyContext = "";
+
                         const archetypePrompts: Record<string, string> = {
                             'blog_post': "Format as an engaging Blog Post. Use conversational transitions.",
                             'pillar_page': "Format as an encyclopedic Pillar Page. Provide dense, factual value.",
@@ -156,39 +202,33 @@ export async function POST(req: NextRequest) {
                         };
                         const archetypeModule = archetypePrompts[config.contentType] || archetypePrompts['blog_post'];
 
-                        // 3. MODULE: BRAND ADVOCACY (HARD INJECTION)
-                        let brandModule = "Maintain an objective, neutral stance.";
-                        if (config.enableBrandVoice) {
-                            brandModule = `[CRITICAL BRAND ADVOCACY]: You MUST explicitly mention "<strong>${brandName}</strong>" in this section. Position "${brandName}" (${brandDesc}) as the absolute best and most reliable solution for the problem discussed in this heading. Do NOT recommend competitors.`;
+                        // === FIX 2: "INCEPTION" MARKA SATIŞ STRATEJİSİ ===
+                        let brandModule = "";
+                        if (config.enableBrandVoice && brandName !== "Our Company") {
+                            // Sadece 2. başlıkta ve ortadaki bir başlıkta usul usul bahset.
+                            if (i === 1 || i === Math.ceil(totalHeadings / 2)) {
+                                brandModule = `\n[SUBTLE BRAND INCEPTION]: Subtly and organically mention "${brandName}" (${brandDesc}) as a helpful solution for the specific challenge discussed here. Do NOT sound like a hard sales advertisement. Weave it naturally into the educational narrative.`;
+                            } 
+                            // Sondan bir önceki başlıkta tam satış yap.
+                            else if (i === totalHeadings - 1) {
+                                brandModule = `\n[BRAND ADVOCACY]: Strongly recommend "${brandName}" as the best choice to solve these problems.`;
+                            } 
+                            // Diğer başlıklarda markadan BAHSETME.
+                            else {
+                                brandModule = `\n[NEUTRALITY]: Keep this section completely educational and objective. Do NOT pitch or mention any software brands directly here.`;
+                            }
                         }
 
-                        // 4. MODULE: STRICT LINKING STRATEGY
-                        let linkModule = "[LINKING STRATEGY]:\n";
-                        
-                        // Internal Link Injection
-                        const contextualInternalLinks = availableInternalLinks.slice(i * 2, (i * 2) + 2); 
-                        if (contextualInternalLinks.length > 0) {
-                            linkModule += `- INTERNAL LINK MANDATORY: You MUST integrate this exact URL: "${contextualInternalLinks[0]}". Find the most relevant phrase and wrap it EXACTLY like this: <a href="${contextualInternalLinks[0]}">relevant phrase</a>. This is a strict requirement.\n`;
-                        }
+                        const negativeModule = `\n[NEGATIVE CONSTRAINTS]: NEVER use cliché AI words like: "In conclusion", "Moreover", "Furthermore", "Delve into", "A testament to". Break any paragraph longer than 3 sentences.`;
 
-                        // External Link Injection (Nofollow + Informational constraint)
-                        if (availableExternalLinks.length > 0 && i % 3 === 0) { 
-                            const externalLink = availableExternalLinks.pop();
-                            linkModule += `- EXTERNAL LINK (OPTIONAL & SAFE): You may use this URL as a citation: "${externalLink}". IF you use it, you MUST use rel="nofollow" target="_blank". DO NOT link to this URL if it looks like a competitor's pricing or service page. Only use it if citing a statistic, study, or blog post.\n`;
-                        }
-
-                        // 5. MODULE: ANTI-AI JARGON
-                        const negativeModule = `[NEGATIVE CONSTRAINTS]: NEVER use cliché AI words like: "In conclusion", "Moreover", "Furthermore", "Delve into", "A testament to", "Navigating the complexities". Break any paragraph longer than 3 sentences.`;
-
-                        // --- ASSEMBLE MASTER PROMPT ---
                         const systemPrompt = `You are an elite Senior SEO Content Architect. Write ONLY the HTML body content for the provided heading. Do NOT output the heading tag itself.
 
 ${archetypeModule}
-${lengthModule}
+Target Word Count: ~${targetWords} words.
 LANGUAGE: EXACTLY ${config.language}. TONE: ${config.tone}.
 
 ${brandModule}
-${linkModule}
+${linkStrategyContext}
 ${negativeModule}`;
 
                         const userMessage = `Write the highly readable HTML content body for the heading: "${heading.text}"\nTarget Keyword Context: "${targetKeyword}"`;
@@ -231,8 +271,7 @@ ${negativeModule}`;
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        // --- IMAGE ENGINE (DALL-E 3) ---
-                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0) {
+                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0 && !req.signal.aborted) {
                             try {
                                 const promptReq = await anthropic.messages.create({
                                     model: "claude-sonnet-4-6", max_tokens: 300,
@@ -255,7 +294,6 @@ ${negativeModule}`;
                         }
                     }
 
-                    // --- CONCLUSION WITH CTA ---
                     sendEvent({ id: `h-faq-${Date.now()}`, type: 'h2', content: "Conclusion & Frequently Asked Questions" });
                     const finalInternalLink = availableInternalLinks.length > 0 ? availableInternalLinks[0] : "#";
                     const conclusionPrompt = `Write the final Conclusion and FAQ section. Language: EXACTLY ${config.language}. Tone: ${config.tone}.
@@ -278,7 +316,6 @@ ${negativeModule}`;
                         sendEvent({ id: `p-faq-${Date.now()}`, type: 'paragraph', content: conclusionHtml });
                     } catch (e) { console.error("[CONCLUSION_GEN_FAULT]:", e); }
 
-                    // --- SEO METADATA ---
                     let finalSeoMetadata = null;
                     try {
                         const contentSample = fullGeneratedHtml.substring(0, 5000); 

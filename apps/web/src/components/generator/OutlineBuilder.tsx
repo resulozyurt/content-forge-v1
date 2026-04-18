@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import { ListTree, Plus, Trash2, FileText, CheckCircle2, Wand2, GripVertical, Loader2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ResearchResultData, FinalOutlineData } from "@/types/generator";
+import { ResearchResultData, FinalOutlineData, GeneratorConfigData } from "@/types/generator";
 import {
     DndContext,
     closestCenter,
@@ -25,6 +25,7 @@ import { CSS } from '@dnd-kit/utilities';
 
 interface OutlineBuilderProps {
     researchData: ResearchResultData;
+    activeConfig: GeneratorConfigData | null; // FIX: Receive config to forward brand/sitemap settings
     onGenerateArticle: (data: FinalOutlineData) => void;
 }
 
@@ -84,7 +85,7 @@ function SortableHeadingItem({ item, onRemove }: { item: HeadingItem, onRemove: 
     );
 }
 
-export default function OutlineBuilder({ researchData, onGenerateArticle }: OutlineBuilderProps) {
+export default function OutlineBuilder({ researchData, activeConfig, onGenerateArticle }: OutlineBuilderProps) {
     const [myOutline, setMyOutline] = useState<HeadingItem[]>([]);
     const [customHeading, setCustomHeading] = useState("");
     const [customLevel, setCustomLevel] = useState<'h2' | 'h3'>('h2');
@@ -101,13 +102,19 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             setIsAIGenerating(true);
             const targetTopic = (researchData as any).topic || researchData.keywords?.[0]?.text || "SEO Topic";
 
+            // === FIX: DİL VE MARKA ADINI API'YE AKTAR ===
+            // Böylece AI Outline üretirken Türkçe üretmeyi ve FieldPie'ı araya sıkıştırmayı bilir.
+            const targetLanguage = activeConfig?.language === 'tr' ? 'Turkish (TR)' : 'English (US)';
+            const targetBrand = activeConfig?.enableBrandVoice ? (activeConfig.customBrandName || "") : "";
+
             const response = await fetch('/api/generate/outline', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     topic: targetTopic,
                     researchData: researchData,
-                    language: (researchData as any).language || "English (US)"
+                    language: targetLanguage,
+                    brandName: targetBrand
                 })
             });
 
@@ -183,6 +190,7 @@ export default function OutlineBuilder({ researchData, onGenerateArticle }: Outl
             headings: myOutline.map(h => ({ id: h.id, level: h.level, text: h.text })),
             selectedKeywords: selectedKeywords,
             sourceUrls: competitorUrls,
+            config: activeConfig ?? undefined, // FIX: Forward brand voice & sitemap config to LiveGeneration
         };
 
         onGenerateArticle(finalData);

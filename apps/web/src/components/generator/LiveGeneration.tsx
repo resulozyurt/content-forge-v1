@@ -8,7 +8,7 @@ import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 import DOMPurify from "isomorphic-dompurify";
 
 interface LiveGenerationProps {
-    outlineData: FinalOutlineData & { config?: any }; // Added config to the type locally to handle the dynamic pass
+    outlineData: FinalOutlineData & { config?: any };
     onComplete: (blocks: GeneratedBlock[]) => void;
 }
 
@@ -41,15 +41,20 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
                 abortControllerRef.current = new AbortController();
 
-                // FIX (BUG-001 & BUG-006): Map user configuration dynamically instead of hardcoding
                 const sanitizedConfig = {
                     language: outlineData.config?.language || "English (US)",
                     tone: outlineData.config?.tone || "Highly Professional, Data-Driven, Authoritative",
                     depth: outlineData.config?.depth || "Comprehensive",
-                    engine: outlineData.config?.engine || "claude-sonnet-4-6",
+                    engine: (outlineData.config as any)?.model || (outlineData.config as any)?.engine || "claude-sonnet-4-6",
                     wpSitemap: outlineData.config?.wpSitemap || "",
                     targetLength: outlineData.config?.targetLength || "1000",
-                    enableBrandVoice: outlineData.config?.enableBrandVoice || false
+                    enableBrandVoice: outlineData.config?.enableBrandVoice ?? false
+                };
+
+                const cleanOutlineData = {
+                    headings: outlineData.headings,
+                    selectedKeywords: outlineData.selectedKeywords,
+                    sourceUrls: outlineData.sourceUrls,
                 };
 
                 const response = await fetch('/api/generate/article', {
@@ -57,7 +62,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                     headers: { 'Content-Type': 'application/json' },
                     signal: abortControllerRef.current.signal,
                     body: JSON.stringify({
-                        outlineData: outlineData,
+                        outlineData: cleanOutlineData,
                         config: sanitizedConfig
                     })
                 });
@@ -79,8 +84,6 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                 let done = false;
                 let processedBlocksCount = 0;
                 const estimatedTotalBlocks = (outlineData.headings?.length || 5) * 2;
-
-                // FIX (BUG-004): Introduce a buffer to accumulate fragmented chunks across network reads
                 let streamBuffer = "";
 
                 while (!done) {
@@ -91,11 +94,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                         const chunk = decoder.decode(value, { stream: true });
                         streamBuffer += chunk;
 
-                        // Split by double newline which dictates the end of a valid SSE event
                         const messages = streamBuffer.split("\n\n");
-
-                        // The last element is either an empty string (if it ended exactly with \n\n) 
-                        // or a partial fragment. We keep it in the buffer for the next read.
                         streamBuffer = messages.pop() || "";
 
                         for (const message of messages) {
@@ -134,9 +133,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                         const currentProgress = 25 + Math.min((processedBlocksCount / estimatedTotalBlocks) * 70, 70);
                                         setProgress(currentProgress);
                                     }
-                                } catch (e) {
-                                    console.warn("Failed to parse JSON block in stream, skipping fragment.", e);
-                                }
+                                } catch (e) { }
                             }
                         }
                     }
@@ -159,8 +156,13 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
             if (abortControllerRef.current) {
                 abortControllerRef.current.abort();
             }
+            // === FIX: KİLİT AÇILIYOR ===
+            // React 18 Strict Mode yüzünden 1. istek iptal olduğunda,
+            // 2. geçerli isteğin atılabilmesi için kilit serbest bırakılır.
+            executionLock.current = false;
         };
-    }, [outlineData]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     return (
         <div className="w-full max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in-95 duration-500">
