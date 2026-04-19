@@ -1,7 +1,7 @@
 // apps/web/src/components/generator/ProseEditor.tsx
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -9,10 +9,13 @@ import Link from '@tiptap/extension-link';
 import TurndownService from 'turndown';
 import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
+import { analyzeContent, analyzeKeywordDensity } from "@/lib/content-analysis";
+import { runSeoChecklist } from "@/lib/seo-checklist";
 import {
     UploadCloud, CheckCircle2, Activity, Target,
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
-    Loader2, AlertCircle, SpellCheck, Copy
+    Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
+    ChevronRight, BookOpen, ListChecks, Hash, XCircle
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +36,44 @@ interface ProseEditorProps {
 
 type SidebarTab = 'optimize' | 'research' | 'technical';
 
+// Reusable Accordion Component for the Right Panel
+function AccordionSection({
+    title, icon: Icon, badgeCount, defaultOpen = false, children
+}: {
+    title: string; icon: any; badgeCount?: number | string; defaultOpen?: boolean; children: React.ReactNode
+}) {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+
+    return (
+        <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden shadow-sm transition-all duration-200">
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className="w-full flex items-center justify-between p-4 bg-gray-50/50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+            >
+                <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 bg-white dark:bg-gray-900 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+                        <Icon size={16} className="text-indigo-500" />
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">{title}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                    {badgeCount !== undefined && (
+                        <span className="text-xs font-bold text-gray-500 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+                            {badgeCount}
+                        </span>
+                    )}
+                    {isOpen ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+                </div>
+            </button>
+            {isOpen && (
+                <div className="p-4 border-t border-gray-100 dark:border-gray-700/50 bg-white dark:bg-gray-800/20">
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function ProseEditor({ blocks, outlineData, initialHtml, documentId }: ProseEditorProps) {
     const [hasSelection, setHasSelection] = useState(false);
     const [activeTab, setActiveTab] = useState<SidebarTab>('optimize');
@@ -41,9 +82,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
 
-    const [seoScore, setSeoScore] = useState<number>(0);
-    const [structureScore, setStructureScore] = useState<number>(0);
-    const [keywordStatus, setKeywordStatus] = useState<Record<string, boolean>>({});
+    const [currentHtml, setCurrentHtml] = useState<string>("");
 
     const [seoMeta, setSeoMeta] = useState({
         focusKeyword: "",
@@ -90,35 +129,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         });
     }, [blocks, outlineData]);
 
-    const calculateMetrics = useCallback((currentEditor: any) => {
-        if (!currentEditor) return;
-
-        const rawText = currentEditor.getText().toLowerCase();
-        const htmlContent = currentEditor.getHTML();
-
-        const targetKeywords = outlineData.selectedKeywords || [];
-        const newStatus: Record<string, boolean> = {};
-        let matchedCount = 0;
-
-        targetKeywords.forEach(kw => {
-            const isMatched = rawText.includes(kw.toLowerCase());
-            newStatus[kw] = isMatched;
-            if (isMatched) matchedCount++;
-        });
-
-        setKeywordStatus(newStatus);
-        setSeoScore(targetKeywords.length > 0 ? Math.round((matchedCount / targetKeywords.length) * 100) : 100);
-
-        const h2Count = (htmlContent.match(/<h2/g) || []).length;
-        const h3Count = (htmlContent.match(/<h3/g) || []).length;
-
-        let structScore = 0;
-        if (h2Count > 0) structScore += 10;
-        if (h3Count > 0) structScore += 5;
-        if (h2Count >= 3) structScore += 5;
-        setStructureScore(structScore);
-    }, [outlineData]);
-
     const editor = useEditor({
         extensions: globalEditorExtensions,
         content: generateHTMLFromBlocks(),
@@ -129,18 +139,29 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             },
         },
         onUpdate({ editor }) {
-            calculateMetrics(editor);
+            setCurrentHtml(editor.getHTML());
         },
         onSelectionUpdate({ editor }) {
             setHasSelection(!editor.state.selection.empty);
         },
+        onCreate({ editor }) {
+            setCurrentHtml(editor.getHTML());
+        }
     });
 
-    const wordCount = editor?.getText().split(/\s+/).filter(word => word.length > 0).length || 0;
+    // Zero API Cost Analytics Memoization
+    const contentStats = useMemo(() => analyzeContent(currentHtml), [currentHtml]);
 
-    useEffect(() => {
-        if (editor) calculateMetrics(editor);
-    }, [editor, calculateMetrics]);
+    const checklist = useMemo(() => runSeoChecklist(currentHtml, seoMeta), [currentHtml, seoMeta]);
+    const checklistScore = checklist.filter(c => c.pass).length;
+
+    const keywordDensity = useMemo(() => {
+        const keywordsToTrack = Array.from(new Set([
+            seoMeta.focusKeyword,
+            ...(outlineData.selectedKeywords || [])
+        ])).filter(k => k.trim().length > 0);
+        return analyzeKeywordDensity(currentHtml, keywordsToTrack);
+    }, [currentHtml, seoMeta.focusKeyword, outlineData.selectedKeywords]);
 
     useEffect(() => {
         let isMounted = true;
@@ -227,12 +248,12 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         if (!editor || isProofreading) return;
         try {
             setIsProofreading(true);
-            const currentHtml = editor.getHTML();
+            const htmlToProof = editor.getHTML();
             const response = await fetch('/api/generate/proofread', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    htmlContent: currentHtml,
+                    htmlContent: htmlToProof,
                     language: (outlineData as any).config?.language || "English (US)"
                 })
             });
@@ -280,8 +301,9 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         <div className="w-full animate-in fade-in zoom-in-95 duration-500">
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-t-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
                 <div className="flex items-center gap-4">
-                    <div className="text-sm text-gray-500 dark:text-gray-400 font-medium bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-md">
-                        {wordCount} words
+                    <div className="text-sm text-gray-500 dark:text-gray-400 font-medium bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-md flex items-center gap-2">
+                        <BookOpen size={16} className="text-gray-400" />
+                        {contentStats.wordCount} words
                     </div>
 
                     {saveStatus === 'saving' && (
@@ -353,45 +375,113 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     <EditorContent editor={editor} />
                 </div>
 
-                <div className="w-full lg:w-96 bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 flex flex-col h-[800px]">
+                <div className="w-full lg:w-[420px] bg-gray-50 dark:bg-gray-900 border-l border-gray-200 dark:border-gray-800 flex flex-col h-[800px]">
                     <div className="flex items-center border-b border-gray-200 dark:border-gray-800 p-2 gap-1 bg-white dark:bg-gray-900">
                         <button onClick={() => setActiveTab('optimize')} className={cn("flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-md transition-colors", activeTab === 'optimize' ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white" : "text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800/50")}><Activity size={14} /> Optimize</button>
                         <button onClick={() => setActiveTab('research')} className={cn("flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-md transition-colors", activeTab === 'research' ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white" : "text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800/50")}><Search size={14} /> Research</button>
                         <button onClick={() => setActiveTab('technical')} className={cn("flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-md transition-colors", activeTab === 'technical' ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white" : "text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800/50")}><Code size={14} /> Technical</button>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-6">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
                         {activeTab === 'optimize' && (
-                            <div className="space-y-8 animate-in fade-in slide-in-from-right-2 duration-300">
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
-                                        <Activity size={16} className="text-blue-500" /> Quality Scores
-                                    </h3>
-                                    <div className="space-y-3">
+                            <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-300">
+
+                                {/* 1. Readability & Content Stats */}
+                                <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true}>
+                                    <div className="space-y-4">
                                         <div>
-                                            <div className="flex justify-between text-sm mb-1"><span className="text-gray-600 dark:text-gray-400 font-medium">SEO Coverage</span><span className="text-gray-900 dark:text-white font-bold">{seoScore}/100</span></div>
-                                            <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${seoScore}%` }}></div></div>
+                                            <div className="flex justify-between text-sm mb-1">
+                                                <span className="text-gray-600 dark:text-gray-400 font-medium">Flesch Reading Ease</span>
+                                                <span className="text-gray-900 dark:text-white font-bold">{contentStats.fleschScore} ({contentStats.fleschLabel})</span>
+                                            </div>
+                                            <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                                <div className={cn("h-full rounded-full transition-all duration-500", contentStats.fleschColor)} style={{ width: `${contentStats.fleschScore}%` }}></div>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <div className="flex justify-between text-sm mb-1"><span className="text-gray-600 dark:text-gray-400 font-medium">Structure</span><span className="text-gray-900 dark:text-white font-bold">{structureScore}/20</span></div>
-                                            <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden"><div className="h-full bg-green-500 rounded-full transition-all duration-500" style={{ width: `${(structureScore / 20) * 100}%` }}></div></div>
+
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div className="bg-gray-50 dark:bg-gray-900 p-2.5 rounded-lg border border-gray-100 dark:border-gray-800">
+                                                <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">Words</div>
+                                                <div className="font-bold text-gray-900 dark:text-white">{contentStats.wordCount}</div>
+                                            </div>
+                                            <div className="bg-gray-50 dark:bg-gray-900 p-2.5 rounded-lg border border-gray-100 dark:border-gray-800">
+                                                <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">Characters</div>
+                                                <div className="font-bold text-gray-900 dark:text-white">{contentStats.charCount}</div>
+                                            </div>
+                                            <div className="bg-gray-50 dark:bg-gray-900 p-2.5 rounded-lg border border-gray-100 dark:border-gray-800">
+                                                <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">Avg. Sentence</div>
+                                                <div className="font-bold text-gray-900 dark:text-white">{Math.round(contentStats.sentenceLength)} words</div>
+                                            </div>
+                                            <div className="bg-gray-50 dark:bg-gray-900 p-2.5 rounded-lg border border-gray-100 dark:border-gray-800">
+                                                <div className="text-gray-500 dark:text-gray-400 text-xs mb-1">Structure</div>
+                                                <div className="font-bold text-gray-900 dark:text-white">{contentStats.h2Count} H2 / {contentStats.h3Count} H3</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-100 dark:border-gray-700/50 flex justify-between">
+                                            <span>Links: {contentStats.internalLinks} In / {contentStats.externalLinks} Out</span>
+                                            <span>Media: {contentStats.imageCount} Img / {contentStats.tableCount} Tbl</span>
                                         </div>
                                     </div>
-                                </div>
-                                <hr className="border-gray-200 dark:border-gray-800" />
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider">
-                                        <Target size={16} className="text-orange-500" /> Keyword Tracking
-                                    </h3>
-                                    <div className="space-y-2">
-                                        {outlineData.selectedKeywords?.map((kw, i) => (
-                                            <div key={i} className={cn("flex items-center justify-between p-2.5 border rounded-lg shadow-sm transition-colors duration-300", keywordStatus[kw] ? "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/50" : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700")}>
-                                                <span className={cn("text-sm font-medium truncate pr-2", keywordStatus[kw] ? "text-green-700 dark:text-green-400" : "text-gray-700 dark:text-gray-300")}>{kw}</span>
-                                                {keywordStatus[kw] ? <CheckCircle2 size={16} className="text-green-500 flex-shrink-0" /> : <div className="w-4 h-4 rounded-full border-2 border-gray-300 dark:border-gray-600 flex-shrink-0" />}
+                                </AccordionSection>
+
+                                {/* 2. SEO Checklist */}
+                                <AccordionSection title="SEO Checklist" icon={ListChecks} badgeCount={`${checklistScore}/10`} defaultOpen={false}>
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Optimization Score</span>
+                                            <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold border-2"
+                                                style={{ borderColor: checklistScore >= 8 ? '#22c55e' : checklistScore >= 5 ? '#eab308' : '#ef4444', color: checklistScore >= 8 ? '#22c55e' : checklistScore >= 5 ? '#eab308' : '#ef4444' }}>
+                                                {checklistScore}
                                             </div>
+                                        </div>
+                                        {checklist.map((item) => (
+                                            <details key={item.id} className="group bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-100 dark:border-gray-800 [&_summary::-webkit-details-marker]:hidden">
+                                                <summary className="flex items-center justify-between p-2.5 cursor-pointer list-none">
+                                                    <div className="flex items-center gap-2.5">
+                                                        {item.pass ? <CheckCircle2 size={16} className="text-green-500" /> : <XCircle size={16} className="text-red-500" />}
+                                                        <span className={cn("text-sm font-medium", item.pass ? "text-gray-900 dark:text-gray-200" : "text-gray-600 dark:text-gray-400")}>{item.label}</span>
+                                                    </div>
+                                                    <ChevronDown size={14} className="text-gray-400 group-open:rotate-180 transition-transform" />
+                                                </summary>
+                                                <div className="p-3 pt-0 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-100 dark:border-gray-800 mt-1">
+                                                    {item.tip}
+                                                </div>
+                                            </details>
                                         ))}
                                     </div>
-                                </div>
+                                </AccordionSection>
+
+                                {/* 3. Keyword Density Breakdown */}
+                                <AccordionSection title="Keyword Density" icon={Hash} badgeCount={keywordDensity.length} defaultOpen={false}>
+                                    <div className="space-y-2">
+                                        {keywordDensity.map((kd, idx) => (
+                                            <div key={idx} className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-lg p-3">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="text-sm font-bold text-gray-900 dark:text-white truncate pr-2">{kd.keyword}</span>
+                                                    <span className={cn("text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap",
+                                                        kd.densityStatus === 'optimal' ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" :
+                                                            kd.densityStatus === 'high' ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" :
+                                                                "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                                                    )}>
+                                                        {kd.densityLabel}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                                                    <span>{kd.occurrences} matches</span>
+                                                    <div className="flex gap-2">
+                                                        <span title="Appears in first paragraph" className={kd.inFirstParagraph ? "text-blue-500" : "opacity-30"}>📄</span>
+                                                        <span title="Appears in headings" className={kd.inAnyHeading ? "text-indigo-500" : "opacity-30"}>📌</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {keywordDensity.length === 0 && (
+                                            <p className="text-xs text-gray-500 text-center py-4">No keywords analyzed yet.</p>
+                                        )}
+                                    </div>
+                                </AccordionSection>
+
                             </div>
                         )}
 
