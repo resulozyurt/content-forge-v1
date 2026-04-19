@@ -89,24 +89,25 @@ export async function POST(req: NextRequest) {
             activeSitemapUrl = activeSitemapUrl.replace(/\/$/, '') + '/sitemap_index.xml'; 
         }
 
-        if (config.enableBrandVoice) {
-            try {
-                const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
-                if (brandProfile) {
-                    brandName = brandProfile.name || brandName;
-                    brandDesc = brandProfile.description || brandDesc; 
-                    
-                    const dbSitemap = (brandProfile as any).sitemapUrl || (brandProfile as any).sitemap || (brandProfile as any).website;
-                    if (!activeSitemapUrl && dbSitemap) {
-                        activeSitemapUrl = dbSitemap;
-                        if (!activeSitemapUrl.includes('.xml')) {
-                            activeSitemapUrl = activeSitemapUrl.replace(/\/$/, '') + '/sitemap_index.xml'; 
-                        }
+        // Her zaman brand profilini çek — enableBrandVoice bağımsız.
+        // Sitemap iç linkleme için her zaman gerekli; marka adı CTA için gerekli.
+        try {
+            const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
+            if (brandProfile) {
+                brandName = brandProfile.name || brandName;
+                brandDesc = brandProfile.description || brandDesc; 
+                
+                // Sitemap: önce config'den gelen değer, yoksa DB'den al
+                const dbSitemap = (brandProfile as any).sitemapUrl || (brandProfile as any).sitemap || (brandProfile as any).website;
+                if (!activeSitemapUrl && dbSitemap) {
+                    activeSitemapUrl = dbSitemap;
+                    if (!activeSitemapUrl.includes('.xml')) {
+                        activeSitemapUrl = activeSitemapUrl.replace(/\/$/, '') + '/sitemap_index.xml'; 
                     }
                 }
-            } catch (e) {
-                console.error("[DB_BRAND_FETCH_ERROR]:", e);
             }
+        } catch (e) {
+            console.error("[DB_BRAND_FETCH_ERROR]:", e);
         }
 
         const encoder = new TextEncoder();
@@ -132,23 +133,54 @@ export async function POST(req: NextRequest) {
 
                 try {
                     let availableInternalLinks: string[] = [];
+                    // Ana domain'i hem sitemap fallback hem CTA fallback için sakla
+                    let brandRootUrl = "";
+                    if (activeSitemapUrl) {
+                        try {
+                            const urlObj = new URL(activeSitemapUrl);
+                            brandRootUrl = urlObj.origin;
+                        } catch (_) {}
+                    }
+
                     if (activeSitemapUrl) {
                         sendEvent({ id: `sys-map-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #6366f1;">[System] Scanning sitemap: ${activeSitemapUrl}...</span></em>` });
-                        try {
-                            const sitemapRes = await fetch(activeSitemapUrl, { signal: AbortSignal.timeout(8000) });
-                            if (sitemapRes.ok) {
-                                const sitemapXml = await sitemapRes.text();
-                                const matches = Array.from(sitemapXml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]);
-                                let filteredLinks = matches.filter(url => !url.endsWith('.xml'));
-                                const isTurkish = config.language.toLowerCase().includes('tr');
-                                filteredLinks = filteredLinks.filter(url => {
-                                    if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
-                                    else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
-                                });
-                                if (filteredLinks.length === 0) filteredLinks = matches.filter(url => !url.endsWith('.xml'));
-                                availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random());
+                        
+                        // Sitemap index içindeyse alt sitemap'leri de tara
+                        const tryFetchSitemap = async (url: string): Promise<string[]> => {
+                            const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+                            if (!res.ok) return [];
+                            const xml = await res.text();
+                            // Sitemap index mi? → Alt sitemap'leri bul ve birini daha tara
+                            const subSitemaps = Array.from(xml.matchAll(/<loc>(.*?\.xml.*?)<\/loc>/g)).map(m => m[1]);
+                            if (subSitemaps.length > 0) {
+                                // En fazla 2 alt sitemap tara
+                                const allLinks: string[] = [];
+                                for (const sub of subSitemaps.slice(0, 2)) {
+                                    const subLinks = await tryFetchSitemap(sub);
+                                    allLinks.push(...subLinks);
+                                    if (allLinks.length > 50) break;
+                                }
+                                return allLinks;
                             }
-                        } catch (e) { console.error("[SITEMAP_FETCH_FAULT]:", e); }
+                            // Normal sitemap → <loc> tag'lerini topla
+                            return Array.from(xml.matchAll(/<loc>(.*?)<\/loc>/g)).map(m => m[1]).filter(u => !u.endsWith('.xml'));
+                        };
+
+                        try {
+                            let allLinks = await tryFetchSitemap(activeSitemapUrl);
+                            // Dil filtresi
+                            const isTurkish = config.language.toLowerCase().includes('tr');
+                            let filteredLinks = allLinks.filter(url => {
+                                if (isTurkish) return url.includes('/tr/') || url.includes('-tr/') || !url.match(/\/(en|de|fr|es)\//i);
+                                else return url.includes('/en/') || !url.match(/\/(tr|de|fr|es)\//i);
+                            });
+                            if (filteredLinks.length === 0) filteredLinks = allLinks;
+                            availableInternalLinks = filteredLinks.sort(() => 0.5 - Math.random());
+                            sendEvent({ id: `sys-map-ok-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #6366f1;">[System] Sitemap tarandı — ${availableInternalLinks.length} link yüklendi.</span></em>` });
+                        } catch (e) { 
+                            console.error("[SITEMAP_FETCH_FAULT]:", e);
+                            sendEvent({ id: `sys-map-err-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #f59e0b;">[System] Sitemap taranamadı, iç linkleme atlandı.</span></em>` });
+                        }
                     }
 
                     sendEvent({ id: `sys-start-${Date.now()}`, type: 'paragraph', content: `<em><span style="color: #6366f1;">[System] Booting ${config.engine} engine. Generating architecture...</span></em>` });
@@ -307,10 +339,18 @@ ${negativeModule}`;
                     }
 
                     sendEvent({ id: `h-faq-${Date.now()}`, type: 'h2', content: "Conclusion & Frequently Asked Questions" });
-                    const finalInternalLink = availableInternalLinks.length > 0 ? availableInternalLinks[0] : "#";
+                    // CTA linki: sitemap'ten link varsa ilkini kullan, yoksa marka ana domainini, o da yoksa boş bırak (# yerine)
+                    const finalInternalLink = availableInternalLinks.length > 0 
+                        ? availableInternalLinks[0] 
+                        : (brandRootUrl || null);
+                    
+                    const ctaLinkInstruction = finalInternalLink
+                        ? `Hyperlink a natural 3-to-4 word contextual phrase to this exact URL: ${finalInternalLink}. DO NOT paste the raw URL as visible text.`
+                        : `Include a strong CTA but do NOT add any hyperlink — just bold the call-to-action phrase instead.`;
+
                     const conclusionPrompt = `Write the final Conclusion and FAQ section. Language: EXACTLY ${config.language}. Tone: ${config.tone}.
 1. Generate a 'Final Verdict' heading (<h2>).
-2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML blockquote. Inside this blockquote, write a compelling call-to-action sentence and hyperlink a natural 3-to-4 word contextual phrase to this exact URL: ${finalInternalLink}. DO NOT paste the raw URL.
+2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML blockquote. Inside this blockquote, write a compelling call-to-action sentence and ${ctaLinkInstruction}
 3. FAQ SECTION: Generate 3 punchy FAQ questions (<h3>).`;
 
                     let conclusionHtml = "";

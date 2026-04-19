@@ -102,10 +102,10 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
             setIsAIGenerating(true);
             const targetTopic = (researchData as any).topic || researchData.keywords?.[0]?.text || "SEO Topic";
 
-            // === FIX: DİL VE MARKA ADINI API'YE AKTAR ===
-            // Böylece AI Outline üretirken Türkçe üretmeyi ve FieldPie'ı araya sıkıştırmayı bilir.
+            // Dil ve marka bilgilerini API'ye aktar
             const targetLanguage = activeConfig?.language === 'tr' ? 'Turkish (TR)' : 'English (US)';
-            const targetBrand = activeConfig?.enableBrandVoice ? (activeConfig.customBrandName || "") : "";
+            const targetBrand = activeConfig?.enableBrandVoice ? (activeConfig.customBrandName || '') : '';
+            const targetBrandDesc = activeConfig?.enableBrandVoice ? (activeConfig.customBrandDesc || '') : '';
 
             const response = await fetch('/api/generate/outline', {
                 method: 'POST',
@@ -114,7 +114,8 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                     topic: targetTopic,
                     researchData: researchData,
                     language: targetLanguage,
-                    brandName: targetBrand
+                    brandName: targetBrand,
+                    brandDesc: targetBrandDesc
                 })
             });
 

@@ -17,8 +17,8 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Unauthorized access." }, { status: 401 });
         }
 
-        // === FIX: brandName EKLENDİ ===
-        const { researchData, topic, language, config, brandName } = await req.json();
+        // === FIX: brandName ve brandDesc alındı ===
+        const { researchData, topic, language, config, brandName, brandDesc } = await req.json();
 
         if (!researchData || !topic) {
             return NextResponse.json({ error: "Invalid payload: Missing research data or topic." }, { status: 400 });
@@ -37,6 +37,16 @@ export async function POST(req: Request) {
             brandInstruction = `\n7. BRAND INCEPTION: Subtly weave the brand name "${brandName}" into EXACTLY ONE of the H2 or H3 headings. Make it sound highly natural and educational, not promotional (e.g., "How ${brandName} Solves [Problem]").`;
         }
 
+        // === FIX: KIYASLAMA İÇERİKLERİNDE KENDİ MARKAYÜ ÜSTE EKLE ===
+        // Konuya göre listicle / karşılaştırma içeriği olduğunu tespit edince
+        // kendi markayı rakipler listesinde EN ÜSTE koy.
+        let ownBrandInstruction = "";
+        const isComparisonTopic = /\b(vs|versus|comparison|alternative|best|top|review|karşılaştırma|alternatif|en iyi|inceleme)\b/i.test(topic);
+        if (brandName && brandName.trim() !== "" && isComparisonTopic) {
+            const brandDescText = brandDesc && brandDesc.trim() !== "" ? brandDesc : "The leading solution in this category";
+            ownBrandInstruction = `\n8. OWN BRAND FIRST: Since this is a comparison/listicle article, you MUST include "${brandName}" as the FIRST H3 item in the main listicle H2 section. Position it as the top recommended option. Label it something like "${brandName} — ${brandDescText.substring(0, 50)}". Do NOT skip or omit it.`;
+        }
+
         const systemPrompt = `You are a Senior Silicon Valley SEO Content Architect. Your mission is to engineer a highly optimized, intent-driven article outline for the topic: "${topic}".
 
 [CRITICAL DYNAMIC OUTLINE RULES - DO NOT IGNORE]:
@@ -47,7 +57,7 @@ export async function POST(req: Request) {
 5. INTENT ADAPTATION:
    - If Listicle (e.g., "Top 10 Tools"): Create ONE main H2 and nest the products as H3s.
    - If Explanatory Guide: Use H3s sparingly, only to break down highly complex H2 steps.
-6. LOGICAL FLOW: Introduction -> Core Definition -> Main Problem/Solution -> Actionable Steps -> Conclusion & FAQ.${brandInstruction}`;
+6. LOGICAL FLOW: Introduction -> Core Definition -> Main Problem/Solution -> Actionable Steps -> Conclusion & FAQ.${brandInstruction}${ownBrandInstruction}`;
 
         const anthropicResponse = await anthropic.messages.create({
             model: "claude-sonnet-4-6", 

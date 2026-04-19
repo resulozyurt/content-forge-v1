@@ -24,15 +24,20 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
 
     const [showAdvanced, setShowAdvanced] = useState(false);
 
-    // FIX: Auto-load brand profile on mount to populate wpSitemap into config
+    // Auto-load brand profile on mount to populate wpSitemap, brandName, brandDesc into config
     useEffect(() => {
         const loadBrandProfile = async () => {
             try {
                 const res = await fetch('/api/user/brand');
                 if (res.ok) {
                     const { data } = await res.json();
-                    if (data?.sitemapUrl) {
-                        setConfig(prev => ({ ...prev, wpSitemap: data.sitemapUrl }));
+                    if (data) {
+                        setConfig(prev => ({
+                            ...prev,
+                            ...(data.sitemapUrl ? { wpSitemap: data.sitemapUrl } : {}),
+                            ...(data.name ? { customBrandName: data.name } : {}),
+                            ...(data.description ? { customBrandDesc: data.description } : {}),
+                        }));
                     }
                 }
             } catch (e) {
