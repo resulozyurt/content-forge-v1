@@ -16,6 +16,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// Extraction of editor extensions outside the component lifecycle to prevent 
+// React 18 Strict Mode from instantiating duplicate extensions (fixes the "duplicate link" warning).
+const globalEditorExtensions = [
+    StarterKit,
+    Image.configure({ inline: true }),
+    Link.configure({ openOnClick: false }),
+];
+
 interface ProseEditorProps {
     blocks?: GeneratedBlock[];
     outlineData: FinalOutlineData;
@@ -112,11 +120,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     }, [outlineData]);
 
     const editor = useEditor({
-        extensions: [
-            StarterKit,
-            Image.configure({ inline: true }),
-            Link.configure({ openOnClick: false }),
-        ],
+        extensions: globalEditorExtensions,
         content: generateHTMLFromBlocks(),
         immediatelyRender: false,
         editorProps: {
@@ -158,7 +162,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     body: JSON.stringify({
                         title: seoMeta.metaTitle || "Untitled Draft",
                         content: htmlContent,
-                        // FIX: Strict Enum mapping to prevent Prisma crash
                         aiModel: "CLAUDE_3_5_SONNET",
                         inputData: outlineData,
                         seoMetadata: seoMeta

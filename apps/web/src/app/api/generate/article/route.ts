@@ -56,12 +56,12 @@ export async function POST(req: NextRequest) {
         try {
             rawBody = await req.json();
         } catch (parseErr) {
-            console.warn("⚠️ [API_ABORT] Istemci veri paketini yuklemeden baglantiyi kesti. Islem iptal edildi.");
+            console.warn("[API_ABORT] Client disconnected before payload transmission. Process safely halted.");
             return new Response(JSON.stringify({ message: "Request aborted by client." }), { status: 499 });
         }
 
         const parseResult = generationPayloadSchema.safeParse(rawBody);
-        if (!parseResult.success) return new Response(JSON.stringify({ message: "Invalid payload." }), { status: 400 });
+        if (!parseResult.success) return new Response(JSON.stringify({ message: "Invalid payload architecture." }), { status: 400 });
 
         const { outlineData, config } = parseResult.data;
 
@@ -81,7 +81,6 @@ export async function POST(req: NextRequest) {
         await BillingGuard.deductCredits(currentUserId, ARTICLE_COST, "GENERATION");
         areCreditsDeducted = true;
 
-        // === FIX 1: BRAND DESC REFERENCE HATASI ÇÖZÜLDÜ (GLOBAL TANIMLANDI) ===
         let brandName = "Our Company";
         let brandDesc = "The leading industry solution";
         let activeSitemapUrl = config.wpSitemap || "";
@@ -95,7 +94,7 @@ export async function POST(req: NextRequest) {
                 const brandProfile = await prisma.brandProfile.findUnique({ where: { userId: currentUserId } });
                 if (brandProfile) {
                     brandName = brandProfile.name || brandName;
-                    brandDesc = brandProfile.description || brandDesc; // const KALDIRILDI!
+                    brandDesc = brandProfile.description || brandDesc; 
                     
                     const dbSitemap = (brandProfile as any).sitemapUrl || (brandProfile as any).sitemap || (brandProfile as any).website;
                     if (!activeSitemapUrl && dbSitemap) {
@@ -157,7 +156,7 @@ export async function POST(req: NextRequest) {
                     let availableExternalLinks = [...new Set(outlineData.sourceUrls || [])].sort(() => 0.5 - Math.random()); 
                     let h2Counter = 0;
                     let fullGeneratedHtml = ""; 
-                    let internalLinksInjected = 0; // === FIX 3: İÇ LİNK SAYACI EKLENDİ ===
+                    let internalLinksInjected = 0; 
 
                     const totalHeadings = outlineData.headings.length;
                     const targetTotalWords = parseInt(config.targetLength, 10) || 1000;
@@ -174,13 +173,16 @@ export async function POST(req: NextRequest) {
                             ? outlineData.selectedKeywords[i % outlineData.selectedKeywords.length] 
                             : heading.text;
 
-                        // === FIX 3: MAKSİMUM 5 İÇ LİNK STRATEJİSİ ===
                         let linkStrategyContext = "\n[MANDATORY LINK INJECTION RULES]:\n";
                         let linkInjected = false;
 
                         if (availableInternalLinks.length > 0 && internalLinksInjected < 5 && (i % 2 === 0 || i === 0)) {
                             const internalLink = availableInternalLinks.pop();
-                            linkStrategyContext += `- INTERNAL LINK MANDATORY: You MUST integrate this URL exactly once: "${internalLink}". Find a highly relevant 2-3 word phrase and wrap it as: <a href="${internalLink}">phrase</a>.\n`;
+                            linkStrategyContext += `- INTERNAL LINK MANDATORY: You MUST integrate this URL exactly once: "${internalLink}".
+[STRICT ANCHOR TEXT RULES]:
+1. NEVER use the brand name ("${brandName}"), "click here", "read more", or the raw URL as the anchor text.
+2. Select a highly relevant, educational 3-to-4 word phrase that flows naturally within a sentence and use it as the anchor.
+3. Example Format: ...which is why <a href="${internalLink}">implementing retail execution strategies</a> can significantly improve...\n`;
                             linkInjected = true;
                             internalLinksInjected++;
                         }
@@ -202,18 +204,14 @@ export async function POST(req: NextRequest) {
                         };
                         const archetypeModule = archetypePrompts[config.contentType] || archetypePrompts['blog_post'];
 
-                        // === FIX 2: "INCEPTION" MARKA SATIŞ STRATEJİSİ ===
                         let brandModule = "";
                         if (config.enableBrandVoice && brandName !== "Our Company") {
-                            // Sadece 2. başlıkta ve ortadaki bir başlıkta usul usul bahset.
                             if (i === 1 || i === Math.ceil(totalHeadings / 2)) {
                                 brandModule = `\n[SUBTLE BRAND INCEPTION]: Subtly and organically mention "${brandName}" (${brandDesc}) as a helpful solution for the specific challenge discussed here. Do NOT sound like a hard sales advertisement. Weave it naturally into the educational narrative.`;
                             } 
-                            // Sondan bir önceki başlıkta tam satış yap.
                             else if (i === totalHeadings - 1) {
                                 brandModule = `\n[BRAND ADVOCACY]: Strongly recommend "${brandName}" as the best choice to solve these problems.`;
                             } 
-                            // Diğer başlıklarda markadan BAHSETME.
                             else {
                                 brandModule = `\n[NEUTRALITY]: Keep this section completely educational and objective. Do NOT pitch or mention any software brands directly here.`;
                             }
@@ -235,6 +233,33 @@ ${negativeModule}`;
                         
                         let finalHeadingText = heading.text; 
                         let generatedText = "";
+
+                        let imageGenerationTask: Promise<string | undefined> | null = null;
+                        
+                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0 && !req.signal.aborted) {
+                            imageGenerationTask = (async () => {
+                                try {
+                                    const promptReq = await anthropic.messages.create({
+                                        model: "claude-sonnet-4-6", max_tokens: 300,
+                                        system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography. Limit: 800 characters.`,
+                                        messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
+                                    });
+                                    const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
+                                    const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, DSLR, no text`;
+
+                                    const imageResponse = await openai.images.generate({
+                                        model: "dall-e-3", 
+                                        prompt: optimizedPrompt.substring(0, 900), 
+                                        n: 1, 
+                                        size: "1024x1024"
+                                    });
+                                    return imageResponse.data?.[0]?.url;
+                                } catch (e) { 
+                                    console.error("[IMAGE_ENGINE_FAULT]", e); 
+                                    return undefined;
+                                }
+                            })();
+                        }
 
                         try {
                             if (config.engine.toLowerCase().includes("claude")) {
@@ -271,26 +296,13 @@ ${negativeModule}`;
                         sendEvent({ id: `h-${i}-${Date.now()}`, type: heading.level, content: finalHeadingText });
                         sendEvent({ id: `p-${i}-${Date.now()}`, type: 'paragraph', content: generatedText });
 
-                        if (heading.level === 'h2' && h2Counter > 0 && h2Counter % 2 === 0 && !req.signal.aborted) {
-                            try {
-                                const promptReq = await anthropic.messages.create({
-                                    model: "claude-sonnet-4-6", max_tokens: 300,
-                                    system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography. Limit: 800 characters.`,
-                                    messages: [{ role: "user", content: `Create visual prompt for heading: "${finalHeadingText}"` }]
-                                });
-                                const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
-                                const optimizedPrompt = textBlock?.text || `Photorealistic corporate photography representing ${finalHeadingText}, diverse real humans, DSLR, no text`;
-
-                                const imageResponse = await openai.images.generate({
-                                    model: "dall-e-3", prompt: optimizedPrompt.substring(0, 900), n: 1, size: "1024x1024", quality: "hd", style: "natural" 
-                                });
-                                const imageUrl = imageResponse.data?.[0]?.url;
-                                if (imageUrl) {
-                                    const imgHtml = `<figure class="my-10"><img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${finalHeadingText}</figcaption></figure>`;
-                                    fullGeneratedHtml += `${imgHtml}\n`; 
-                                    sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
-                                }
-                            } catch (e) { console.error("[IMAGE_ENGINE_FAULT]", e); }
+                        if (imageGenerationTask && !req.signal.aborted) {
+                            const imageUrl = await imageGenerationTask;
+                            if (imageUrl) {
+                                const imgHtml = `<figure class="my-10"><img src="${imageUrl}" alt="${finalHeadingText}" class="w-full rounded-2xl shadow-xl border border-gray-200 object-cover" /><figcaption class="text-center text-sm text-gray-500 mt-3 italic">${finalHeadingText}</figcaption></figure>`;
+                                fullGeneratedHtml += `${imgHtml}\n`; 
+                                sendEvent({ id: `img-${i}-${Date.now()}`, type: 'image', content: imgHtml });
+                            }
                         }
                     }
 
@@ -298,7 +310,7 @@ ${negativeModule}`;
                     const finalInternalLink = availableInternalLinks.length > 0 ? availableInternalLinks[0] : "#";
                     const conclusionPrompt = `Write the final Conclusion and FAQ section. Language: EXACTLY ${config.language}. Tone: ${config.tone}.
 1. Generate a 'Final Verdict' heading (<h2>).
-2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish blockquote directing them to: ${finalInternalLink}.
+2. CTA BLOCK: Explicitly invite the reader to try "${brandName}" (${brandDesc}). Create a stylish HTML blockquote. Inside this blockquote, write a compelling call-to-action sentence and hyperlink a natural 3-to-4 word contextual phrase to this exact URL: ${finalInternalLink}. DO NOT paste the raw URL.
 3. FAQ SECTION: Generate 3 punchy FAQ questions (<h3>).`;
 
                     let conclusionHtml = "";
