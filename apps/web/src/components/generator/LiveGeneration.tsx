@@ -1,11 +1,12 @@
 // apps/web/src/components/generator/LiveGeneration.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { Loader2, CheckCircle2, Sparkles, Code2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 import DOMPurify from "isomorphic-dompurify";
+import { useContentEngine } from "@/hooks/useContentEngine"; // V2 Multi-Agent Engine Hook
 
 interface LiveGenerationProps {
     outlineData: FinalOutlineData & { config?: any };
@@ -13,165 +14,126 @@ interface LiveGenerationProps {
 }
 
 export default function LiveGeneration({ outlineData, onComplete }: LiveGenerationProps) {
-    const [blocks, setBlocks] = useState<GeneratedBlock[]>([]);
-    const [isFinished, setIsFinished] = useState(false);
-    const [currentTask, setCurrentTask] = useState("Initializing AI Engine and establishing secure stream...");
-    const [progress, setProgress] = useState(0);
-    const [error, setError] = useState<string | null>(null);
+    // 1. Initialize the V2 Engine
+    const {
+        status,
+        currentSectionName,
+        generatedContent,
+        errorMessage,
+        startGeneration
+    } = useContentEngine();
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const executionLock = useRef(false);
-    const abortControllerRef = useRef<AbortController | null>(null);
 
+    // 2. Auto-scroll to bottom as content flows in from the agents
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [blocks, currentTask]);
+    }, [generatedContent, status]);
 
+    // 3. Kickoff the Multi-Agent Pipeline on mount
     useEffect(() => {
         if (executionLock.current) return;
         executionLock.current = true;
-        let isMounted = true;
 
-        const generateArticle = async () => {
-            try {
-                setProgress(10);
-                setCurrentTask("Connecting to generation pipeline...");
+        // Map user config to V2 Engine parameters
+        const keyword = outlineData.selectedKeywords?.[0] || outlineData.headings?.[0]?.title || "Target Keyword";
 
-                abortControllerRef.current = new AbortController();
+        // Isolate language parameter for the V2 Localization Engine
+        let targetLanguage: "en-US" | "tr-TR" | "es-ES" = "en-US";
+        const configLang = outlineData.config?.language?.toLowerCase() || "";
+        if (configLang.includes("türk") || configLang.includes("tr")) targetLanguage = "tr-TR";
+        if (configLang.includes("spanish") || configLang.includes("es")) targetLanguage = "es-ES";
 
-                const sanitizedConfig = {
-                    language: outlineData.config?.language || "English (US)",
-                    tone: outlineData.config?.tone || "Highly Professional, Data-Driven, Authoritative",
-                    depth: outlineData.config?.depth || "Comprehensive",
-                    engine: (outlineData.config as any)?.model || (outlineData.config as any)?.engine || "claude-sonnet-4-6",
-                    wpSitemap: outlineData.config?.wpSitemap || "",
-                    targetLength: outlineData.config?.targetLength || "1000",
-                    enableBrandVoice: outlineData.config?.enableBrandVoice ?? false
-                };
+        // Trigger Agent Pipeline
+        startGeneration({ keyword, targetLanguage });
 
-                const cleanOutlineData = {
-                    headings: outlineData.headings,
-                    selectedKeywords: outlineData.selectedKeywords,
-                    sourceUrls: outlineData.sourceUrls,
-                };
-
-                const response = await fetch('/api/generate/article', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: abortControllerRef.current.signal,
-                    body: JSON.stringify({
-                        outlineData: cleanOutlineData,
-                        config: sanitizedConfig
-                    })
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData.message || "Generation pipeline failed to initialize.");
-                }
-
-                if (!response.body) {
-                    throw new Error("ReadableStream architecture is not supported.");
-                }
-
-                setProgress(25);
-                setCurrentTask("Stream established. Awaiting incoming content blocks...");
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder("utf-8");
-                let done = false;
-                let processedBlocksCount = 0;
-                const estimatedTotalBlocks = (outlineData.headings?.length || 5) * 2;
-                let streamBuffer = "";
-
-                while (!done) {
-                    const { value, done: readerDone } = await reader.read();
-                    done = readerDone;
-
-                    if (value) {
-                        const chunk = decoder.decode(value, { stream: true });
-                        streamBuffer += chunk;
-
-                        const messages = streamBuffer.split("\n\n");
-                        streamBuffer = messages.pop() || "";
-
-                        for (const message of messages) {
-                            if (message.startsWith("data: ")) {
-                                const dataStr = message.replace("data: ", "").trim();
-
-                                if (dataStr === "[DONE]") {
-                                    if (isMounted) {
-                                        setIsFinished(true);
-                                        setCurrentTask("Generation Complete!");
-                                        setProgress(100);
-                                    }
-                                    break;
-                                }
-
-                                try {
-                                    const parsedBlock = JSON.parse(dataStr) as GeneratedBlock;
-                                    processedBlocksCount++;
-
-                                    if (isMounted) {
-                                        setBlocks((prev) => {
-                                            if (prev.some(b => b.id === parsedBlock.id)) return prev;
-                                            return [...prev, parsedBlock];
-                                        });
-
-                                        if (parsedBlock.type === 'h2' || parsedBlock.type === 'h3') {
-                                            setCurrentTask(`Drafting section: ${typeof parsedBlock.content === 'string' ? parsedBlock.content.substring(0, 40) : '...'}...`);
-                                        } else if (parsedBlock.type === 'paragraph') {
-                                            setCurrentTask(`Applying NLP algorithms and optimizing keyword density...`);
-                                        } else if (parsedBlock.type === 'image') {
-                                            setCurrentTask(`Engineering precise text prompts for visual assets...`);
-                                        } else if (parsedBlock.type === 'seo_metadata') {
-                                            setCurrentTask(`Finalizing Rank Math SEO configuration...`);
-                                        }
-
-                                        const currentProgress = 25 + Math.min((processedBlocksCount / estimatedTotalBlocks) * 70, 70);
-                                        setProgress(currentProgress);
-                                    }
-                                } catch (e) { }
-                            }
-                        }
-                    }
-                }
-
-            } catch (err: any) {
-                if (err.name === 'AbortError') return;
-                console.error("[GENERATION_FAULT]:", err);
-                if (isMounted) {
-                    setError(err.message || "A critical fault interrupted the sequence.");
-                    setCurrentTask("Process halted.");
-                }
-            }
-        };
-
-        generateArticle();
-
-        return () => {
-            isMounted = false;
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-            }
-            // === FIX: KİLİT AÇILIYOR ===
-            // React 18 Strict Mode yüzünden 1. istek iptal olduğunda,
-            // 2. geçerli isteğin atılabilmesi için kilit serbest bırakılır.
-            executionLock.current = false;
-        };
+        // Cleanup lock if component unmounts prematurely
+        return () => { executionLock.current = false; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // 4. Dynamic Process Transparency Mapping
+    const isFinished = status === "COMPLETED";
+
+    const progress = useMemo(() => {
+        if (errorMessage) return 100;
+        switch (status) {
+            case "IDLE": return 0;
+            case "RESEARCHING": return 20;
+            case "PLANNING": return 40;
+            case "WRITING_SECTION": return 65;
+            case "QA_CHECK": return 85;
+            case "COMPLETED": return 100;
+            default: return 50;
+        }
+    }, [status, errorMessage]);
+
+    const currentTaskText = useMemo(() => {
+        if (errorMessage) return "Process halted.";
+        switch (status) {
+            case "IDLE": return "Initializing AI Engine...";
+            case "RESEARCHING": return "🔍 Analyzing SERP data & brand guidelines...";
+            case "PLANNING": return "📐 Architecting JSON-based section blueprints...";
+            case "WRITING_SECTION": return `✍️ Drafting section: ${currentSectionName || '...'}`;
+            case "QA_CHECK": return `🛡️ Running strict format & readability checks on: ${currentSectionName || '...'}`;
+            case "COMPLETED": return "Generation Complete!";
+            default: return "Processing...";
+        }
+    }, [status, currentSectionName, errorMessage]);
+
+    // 5. Transform V2 Raw Markdown into UI Blocks (Backward Compatibility for ProseEditor)
+    const blocks = useMemo<GeneratedBlock[]>(() => {
+        if (!generatedContent) return [];
+        const rawChunks = generatedContent.split('\n\n').filter(b => b.trim().length > 0);
+
+        return rawChunks.map((chunk, i) => {
+            const id = `v2-block-${i}`;
+
+            if (chunk.startsWith('## ')) {
+                return { id, type: 'h2', content: chunk.replace('## ', '').trim() };
+            }
+            if (chunk.startsWith('### ')) {
+                return { id, type: 'h3', content: chunk.replace('### ', '').trim() };
+            }
+            if (chunk.includes('[IMAGE_PROMPT:')) {
+                const promptText = chunk.match(/\[IMAGE_PROMPT:(.*?)\]/)?.[1] || "Visual Asset Prompt";
+                const formatted = `<div class="bg-indigo-50 border border-indigo-200 p-4 rounded-xl text-indigo-900 text-sm font-mono shadow-sm"><span class="font-bold flex items-center gap-2 mb-1">📸 Nano Banana 2 Image Engine</span> ${promptText}</div>`;
+                return { id, type: 'image', content: formatted };
+            }
+
+            // Format basic markdown semantics to HTML for UI rendering
+            let htmlContent = chunk
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+            // Detect and format Bullet Lists
+            if (htmlContent.startsWith('- ') || htmlContent.startsWith('* ')) {
+                const listItems = htmlContent.split('\n').map(item => `<li>${item.replace(/^[-*]\s/, '')}</li>`).join('');
+                htmlContent = `<ul class="list-disc pl-6 my-2 space-y-1">${listItems}</ul>`;
+            }
+
+            // Detect and format Markdown Tables
+            if (htmlContent.includes('|---|')) {
+                htmlContent = `<div class="overflow-x-auto my-4"><pre class="text-xs bg-gray-50 dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700">${chunk}</pre></div>`;
+            }
+
+            return { id, type: 'paragraph', content: htmlContent };
+        });
+    }, [generatedContent]);
+
+    // 6. UI Render Layer
     return (
         <div className="w-full max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in-95 duration-500">
+            {/* Header Dashboard */}
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                         <div className={cn("p-2 rounded-lg",
                             isFinished ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" :
-                                error ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
+                                errorMessage ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
                                     "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse"
                         )}>
                             {isFinished ? <CheckCircle2 size={24} /> : <Code2 size={24} />}
@@ -179,14 +141,14 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                         <div>
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
                                 {isFinished ? "Content Successfully Generated" :
-                                    error ? "Pipeline Execution Failed" :
-                                        "AI Production Engine Running..."}
+                                    errorMessage ? "Pipeline Execution Failed" :
+                                        "Multi-Agent Production Engine Running..."}
                             </h2>
                             <p className={cn("text-sm font-medium mt-0.5 flex items-center gap-2",
-                                error ? "text-red-500" : "text-gray-500 dark:text-gray-400"
+                                errorMessage ? "text-red-500" : "text-gray-500 dark:text-gray-400"
                             )}>
-                                {!isFinished && !error && <Loader2 size={14} className="animate-spin" />}
-                                {error ? error : currentTask}
+                                {!isFinished && !errorMessage && <Loader2 size={14} className="animate-spin" />}
+                                {errorMessage ? errorMessage : currentTaskText}
                             </p>
                         </div>
                     </div>
@@ -202,22 +164,24 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                     )}
                 </div>
 
+                {/* Progress Bar */}
                 <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
                     <div
                         className={cn("h-2 rounded-full transition-all duration-500 ease-out",
-                            error ? "bg-red-500" : "bg-gradient-to-r from-blue-600 to-indigo-600"
+                            errorMessage ? "bg-red-500" : "bg-gradient-to-r from-blue-600 to-indigo-600"
                         )}
-                        style={{ width: `${error ? 100 : progress}%` }}
+                        style={{ width: `${progress}%` }}
                     ></div>
                 </div>
             </div>
 
+            {/* Content Output Viewport */}
             <div
                 ref={scrollRef}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-inner overflow-y-auto p-8 h-[600px] scroll-smooth"
             >
                 <div className="max-w-3xl mx-auto space-y-6">
-                    {blocks.length === 0 && !error && (
+                    {blocks.length === 0 && !errorMessage && (
                         <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-4 opacity-50 pt-20">
                             <Sparkles size={48} className="animate-pulse" />
                             <p>Connecting to AI microservices...</p>
@@ -248,21 +212,10 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                                     dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(block.content) }}
                                 />
                             )}
-                            {block.type === 'seo_metadata' && (
-                                <div className="my-8 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4 flex items-center gap-4 shadow-sm animate-in zoom-in duration-500">
-                                    <div className="p-2 bg-indigo-100 dark:bg-indigo-800 rounded-lg">
-                                        <Sparkles className="text-indigo-600 dark:text-indigo-300" size={24} />
-                                    </div>
-                                    <div>
-                                        <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100">Rank Math SEO Module Active</h4>
-                                        <p className="text-xs text-indigo-700 dark:text-indigo-300 mt-1">Focus Keyword, Meta Title, and Description successfully synthesized.</p>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     ))}
 
-                    {!isFinished && !error && blocks.length > 0 && (
+                    {status === "WRITING_SECTION" && (
                         <div className="w-3 h-6 bg-blue-500 animate-pulse mt-4"></div>
                     )}
                 </div>
