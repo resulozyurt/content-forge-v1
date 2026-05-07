@@ -40,7 +40,7 @@ Return ONLY the HTML content. DO NOT include the heading itself.`;
         temperature: 0.6
     });
 
-    const contentBlock = response.content.find((block: any) => block.type === 'text');
+    const contentBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === "text")
     let generatedHtml = contentBlock?.text || "";
     
     // --- GEMINI NANO BANANA GÖRSEL MOTORU ---
@@ -53,7 +53,7 @@ Return ONLY the HTML content. DO NOT include the heading itself.`;
                 system: `You are an elite AI Image Prompt Engineer. Write a highly descriptive prompt for a photorealistic corporate image based on the heading. NO TEXT IN IMAGE. Style: DSLR, raw photography. Limit: 800 characters.`,
                 messages: [{ role: "user", content: `Create visual prompt for heading: "${sectionPlan.title}"` }]
             });
-            const textBlock = promptReq.content.find((block: any) => block.type === 'text');
+            const textBlock = promptReq.content.find((block): block is Anthropic.TextBlock => block.type === "text")
             const optimizedPrompt = textBlock?.text || sectionPlan.title;
 
             // GEMINI NANO BANANA API ENTEGRASYONU

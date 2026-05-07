@@ -51,7 +51,7 @@ CRITICAL: You MUST perfectly preserve the <h2> tag and any <figure>/<img> tags e
         temperature: 0.1
     });
 
-    const contentBlock = response.content.find((block: any) => block.type === 'text');
+    const contentBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === "text")
     return NextResponse.json({ status: "corrected", chunk: contentBlock?.text || generatedChunk }, { status: 200 });
 
   } catch (error) {
