@@ -39,7 +39,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         executionLock.current = true;
 
         // Map user config to V2 Engine parameters
-        const keyword = outlineData.selectedKeywords?.[0] || outlineData.headings?.[0]?.title || "Target Keyword";
+        const keyword = outlineData.selectedKeywords?.[0] || outlineData.headings?.[0]?.text || "Target Keyword";
 
         // Isolate language parameter for the V2 Localization Engine
         let targetLanguage: "en-US" | "tr-TR" | "es-ES" = "en-US";
