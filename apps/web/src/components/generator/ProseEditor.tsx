@@ -6,6 +6,10 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
+import { Table } from '@tiptap/extension-table/table';
+import { TableRow } from '@tiptap/extension-table/row';
+import { TableCell } from '@tiptap/extension-table/cell';
+import { TableHeader } from '@tiptap/extension-table/header';
 import TurndownService from 'turndown';
 import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
@@ -19,12 +23,39 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// Extraction of editor extensions outside the component lifecycle to prevent 
-// React 18 Strict Mode from instantiating duplicate extensions (fixes the "duplicate link" warning).
+// ---------------------------------------------------------------------------
+// DOMPurify — tüm semantik HTML taglarını koru, tablo ve figür dahil
+// ---------------------------------------------------------------------------
+const PROSE_PURIFY_CONFIG: DOMPurify.Config = {
+    ALLOWED_TAGS: [
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "p", "strong", "em", "b", "i", "u", "s", "br", "hr",
+        "ul", "ol", "li",
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
+        "figure", "figcaption", "img",
+        "a", "blockquote", "cite", "pre", "code", "span", "div",
+    ],
+    ALLOWED_ATTR: [
+        "href", "src", "alt", "title", "target", "rel",
+        "class", "id", "style",
+        "width", "height", "loading",
+        "colspan", "rowspan",
+    ],
+    ALLOW_UNKNOWN_PROTOCOLS: false,
+    FORCE_BODY: false,
+};
+
+// ---------------------------------------------------------------------------
+// TipTap extensions — tablo desteği dahil
+// ---------------------------------------------------------------------------
 const globalEditorExtensions = [
     StarterKit,
     Image.configure({ inline: true }),
     Link.configure({ openOnClick: false }),
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableHeader,
+    TableCell,
 ];
 
 interface ProseEditorProps {
@@ -36,7 +67,6 @@ interface ProseEditorProps {
 
 type SidebarTab = 'optimize' | 'research' | 'technical';
 
-// Reusable Accordion Component for the Right Panel
 function AccordionSection({
     title, icon: Icon, badgeCount, defaultOpen = false, children
 }: {
@@ -81,7 +111,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [isAILoading, setIsAILoading] = useState<boolean>(false);
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
-
     const [currentHtml, setCurrentHtml] = useState<string>("");
 
     const [seoMeta, setSeoMeta] = useState({
@@ -90,19 +119,29 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         metaDescription: ""
     });
 
-    const generateHTMLFromBlocks = useCallback(() => {
-        if (initialHtml) return DOMPurify.sanitize(initialHtml);
-        if (!blocks) return "";
+    // -----------------------------------------------------------------------
+    // HTML üretici — DOMPurify'ı tablo taglarını koruyacak config ile çağır
+    // -----------------------------------------------------------------------
+    const generateHTMLFromBlocks = useCallback((): string => {
+        if (initialHtml) {
+            return DOMPurify.sanitize(initialHtml, PROSE_PURIFY_CONFIG);
+        }
+        if (!blocks || blocks.length === 0) return "";
 
         const rawHtml = blocks.map(block => {
+            // V2 engine tek "html" bloğu olarak gönderiyor — direkt kullan
+            if ((block.type as any) === 'html' && typeof block.content === 'string') {
+                return block.content;
+            }
+            // V1 legacy block formatları
             if (block.type === 'h2' && typeof block.content === 'string') return `<h2>${block.content}</h2>`;
             if (block.type === 'h3' && typeof block.content === 'string') return `<h3>${block.content}</h3>`;
             if (block.type === 'paragraph' && typeof block.content === 'string') return block.content;
             if (block.type === 'image' && typeof block.content === 'string') return block.content;
             return '';
-        }).join('');
+        }).join('\n');
 
-        return DOMPurify.sanitize(rawHtml);
+        return DOMPurify.sanitize(rawHtml, PROSE_PURIFY_CONFIG);
     }, [blocks, initialHtml]);
 
     useEffect(() => {
@@ -135,7 +174,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         immediatelyRender: false,
         editorProps: {
             attributes: {
-                class: 'prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px] p-4',
+                class: 'prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px] p-4 prose-table:w-full prose-th:border prose-th:border-gray-300 prose-th:px-3 prose-th:py-2 prose-th:bg-gray-50 prose-th:dark:bg-gray-800 prose-td:border prose-td:border-gray-300 prose-td:px-3 prose-td:py-2',
             },
         },
         onUpdate({ editor }) {
@@ -149,9 +188,19 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         }
     });
 
-    // Zero API Cost Analytics Memoization
-    const contentStats = useMemo(() => analyzeContent(currentHtml), [currentHtml]);
+    // -----------------------------------------------------------------------
+    // blocks değiştiğinde editör içeriğini güncelle
+    // -----------------------------------------------------------------------
+    useEffect(() => {
+        if (editor && blocks && blocks.length > 0) {
+            const html = generateHTMLFromBlocks();
+            if (html) {
+                editor.commands.setContent(html, false);
+            }
+        }
+    }, [editor, blocks, generateHTMLFromBlocks]);
 
+    const contentStats = useMemo(() => analyzeContent(currentHtml), [currentHtml]);
     const checklist = useMemo(() => runSeoChecklist(currentHtml, seoMeta), [currentHtml, seoMeta]);
     const checklistScore = checklist.filter(c => c.pass).length;
 
@@ -183,7 +232,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     body: JSON.stringify({
                         title: seoMeta.metaTitle || "Untitled Draft",
                         content: htmlContent,
-                        aiModel: "CLAUDE_3_5_SONNET",
+                        aiModel: "CLAUDE_SONNET_4_6",
                         inputData: outlineData,
                         seoMetadata: seoMeta
                     })
@@ -208,6 +257,13 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         try {
             const html = editor.getHTML();
             const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+            // Tablo dönüşümü için turndown table eklentisi (basit fallback)
+            turndownService.addRule('table', {
+                filter: ['table'],
+                replacement: (content, node) => {
+                    return '\n\n' + (node as HTMLElement).outerHTML + '\n\n';
+                }
+            });
             const markdown = turndownService.turndown(html);
             await navigator.clipboard.writeText(markdown);
             alert("Success: Document architecture copied to clipboard as Markdown.");
@@ -233,7 +289,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
             if (!response.ok) throw new Error("The NLP transformation pipeline failed.");
             const data = await response.json();
-            const sanitizedHtml = DOMPurify.sanitize(data.result);
+            const sanitizedHtml = DOMPurify.sanitize(data.result, PROSE_PURIFY_CONFIG);
             editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, sanitizedHtml).run();
         } catch (error: any) {
             console.error("[EDITOR_AI_FAULT]:", error);
@@ -260,7 +316,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
             if (!response.ok) throw new Error("Proofreading service unavailable.");
             const data = await response.json();
-            editor.commands.setContent(DOMPurify.sanitize(data.result));
+            editor.commands.setContent(DOMPurify.sanitize(data.result, PROSE_PURIFY_CONFIG));
             alert("Success: Document optimized.");
         } catch (error: any) {
             console.error("[PROOFREAD_EXECUTION_FAULT]:", error);
@@ -385,8 +441,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                         {activeTab === 'optimize' && (
                             <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-300">
-
-                                {/* 1. Readability & Content Stats */}
                                 <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true}>
                                     <div className="space-y-4">
                                         <div>
@@ -425,7 +479,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                     </div>
                                 </AccordionSection>
 
-                                {/* 2. SEO Checklist */}
                                 <AccordionSection title="SEO Checklist" icon={ListChecks} badgeCount={`${checklistScore}/10`} defaultOpen={false}>
                                     <div className="space-y-3">
                                         <div className="flex items-center justify-between mb-4">
@@ -452,7 +505,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                     </div>
                                 </AccordionSection>
 
-                                {/* 3. Keyword Density Breakdown */}
                                 <AccordionSection title="Keyword Density" icon={Hash} badgeCount={keywordDensity.length} defaultOpen={false}>
                                     <div className="space-y-2">
                                         {keywordDensity.map((kd, idx) => (
@@ -481,7 +533,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                         )}
                                     </div>
                                 </AccordionSection>
-
                             </div>
                         )}
 
@@ -500,6 +551,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                 </div>
                             </div>
                         )}
+
                         {activeTab === 'technical' && (
                             <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-300">
                                 <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2 uppercase tracking-wider"><Code size={16} className="text-emerald-500" /> Rank Math Meta & Schema</h3>

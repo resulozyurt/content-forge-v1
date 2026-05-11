@@ -1,12 +1,13 @@
+// apps/web/src/hooks/useContentEngine.ts
 import { useState } from "react";
 
-export type EngineStatus = 
-  | "IDLE" 
-  | "RESEARCHING" 
-  | "PLANNING" 
-  | "WRITING_SECTION" 
-  | "QA_CHECK" 
-  | "COMPLETED" 
+export type EngineStatus =
+  | "IDLE"
+  | "RESEARCHING"
+  | "PLANNING"
+  | "WRITING_SECTION"
+  | "QA_CHECK"
+  | "COMPLETED"
   | "ERROR";
 
 interface GenerationParams {
@@ -17,6 +18,7 @@ interface GenerationParams {
 export function useContentEngine() {
   const [status, setStatus] = useState<EngineStatus>("IDLE");
   const [currentSectionName, setCurrentSectionName] = useState<string>("");
+  // generatedContent artık ham string değil, onaylı HTML chunk'larının dizisi
   const [generatedContent, setGeneratedContent] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -26,7 +28,7 @@ export function useContentEngine() {
       setGeneratedContent("");
       setErrorMessage(null);
 
-      // --- PHASE 1: RESEARCH AGENT ---
+      // ── PHASE 1: RESEARCH AGENT ──────────────────────────────────────────
       const researchResponse = await fetch("/api/v2/generator/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -38,7 +40,7 @@ export function useContentEngine() {
       }
       const researchBlueprint = await researchResponse.json();
 
-      // --- PHASE 2: PLANNER AGENT ---
+      // ── PHASE 2: PLANNER AGENT ───────────────────────────────────────────
       setStatus("PLANNING");
       const outlineResponse = await fetch("/api/v2/generator/outline", {
         method: "POST",
@@ -51,27 +53,28 @@ export function useContentEngine() {
       }
       const { outline } = await outlineResponse.json();
 
-      // Append Title to UI immediately
-      setGeneratedContent((prev) => prev + `# ${outline.title}\n\n`);
+      // Makale başlığını HTML olarak ekle — artık ## Markdown değil
+      setGeneratedContent(
+        `<h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-8 pb-4 border-b border-gray-200 dark:border-gray-700">${outline.title}</h1>\n\n`
+      );
 
-      // --- PHASE 3 & 4: WRITER AND EDITOR LOOP ---
-      // We iterate through each section from the Outline sequentially.
+      // ── PHASE 3 & 4: WRITER + EDITOR LOOP ───────────────────────────────
       for (const section of outline.sections) {
         setStatus("WRITING_SECTION");
         setCurrentSectionName(section.title);
 
-        // Call Writer
         const writerResponse = await fetch("/api/v2/generator/writer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ researchBlueprint, sectionPlan: section }),
         });
-        if (!writerResponse.ok) throw new Error(`Writing Failed for section: ${section.title}`);
+        if (!writerResponse.ok) {
+          throw new Error(`Writing Failed for section: ${section.title}`);
+        }
         const { chunk: draftChunk } = await writerResponse.json();
 
         setStatus("QA_CHECK");
-        
-        // Call Editor (Quality Assurance)
+
         const editorResponse = await fetch("/api/v2/generator/editor", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -81,16 +84,17 @@ export function useContentEngine() {
             sectionPlan: section,
           }),
         });
-        if (!editorResponse.ok) throw new Error(`QA Check Failed for section: ${section.title}`);
+        if (!editorResponse.ok) {
+          throw new Error(`QA Check Failed for section: ${section.title}`);
+        }
         const { chunk: finalApprovedChunk } = await editorResponse.json();
 
-        // Append the approved chunk to the UI state seamlessly
+        // Onaylı HTML chunk'ı direkt state'e ekle — HİÇBİR dönüşüm yapma
         setGeneratedContent((prev) => prev + finalApprovedChunk + "\n\n");
       }
 
       setStatus("COMPLETED");
       setCurrentSectionName("");
-
     } catch (error: any) {
       console.error("[CONTENT_ENGINE_CRASH]", error);
       setStatus("ERROR");
