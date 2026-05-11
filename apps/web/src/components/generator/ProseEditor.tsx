@@ -26,7 +26,7 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 // DOMPurify — tüm semantik HTML taglarını koru, tablo ve figür dahil
 // ---------------------------------------------------------------------------
-const PROSE_PURIFY_CONFIG: DOMPurify.Config = {
+const PROSE_PURIFY_CONFIG = {
     ALLOWED_TAGS: [
         "h1", "h2", "h3", "h4", "h5", "h6",
         "p", "strong", "em", "b", "i", "u", "s", "br", "hr",
@@ -195,7 +195,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         if (editor && blocks && blocks.length > 0) {
             const html = generateHTMLFromBlocks();
             if (html) {
-                editor.commands.setContent(html, false);
+                editor.commands.setContent(html, false as any);
             }
         }
     }, [editor, blocks, generateHTMLFromBlocks]);

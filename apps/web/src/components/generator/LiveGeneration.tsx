@@ -16,7 +16,7 @@ interface LiveGenerationProps {
 // ---------------------------------------------------------------------------
 // DOMPurify — tablo, figür, resim, liste gibi tüm HTML taglarını koru
 // ---------------------------------------------------------------------------
-const DOMPURIFY_CONFIG: DOMPurify.Config = {
+const DOMPURIFY_CONFIG = {
     ALLOWED_TAGS: [
         "h1", "h2", "h3", "h4", "h5", "h6",
         "p", "strong", "em", "b", "i", "u", "s", "br", "hr",
