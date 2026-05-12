@@ -20,7 +20,6 @@ export interface SeoMetadata {
 interface GenerationParams {
   keyword: string;
   targetLanguage: "en-US" | "tr-TR" | "es-ES";
-  // The exact headings the user built in Outline Architect — used directly
   userHeadings: OutlineHeading[];
   selectedKeywords: string[];
 }
@@ -44,8 +43,7 @@ export function useContentEngine() {
       setSeoMetadata(null);
       setErrorMessage(null);
 
-      // ── PHASE 1: RESEARCH — fetch brand/sitemap context only ─────────────
-      // We do NOT hit the outline agent here. The user's headings are the outline.
+      // ── PHASE 1: RESEARCH ─────────────────────────────────────────────────
       const researchRes = await fetch("/api/v2/generator/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -58,18 +56,16 @@ export function useContentEngine() {
       const researchBlueprint = await researchRes.json();
       researchBlueprint.selectedKeywords = selectedKeywords;
 
-      // ── Build a working outline from the user's Outline Architect headings ─
-      // Group headings: every H2 becomes a section, its H3/H4 children are sub-points
+      // ── Build sections from user's Outline Architect headings ─────────────
       const sections = buildSectionsFromHeadings(userHeadings);
-      const articleTitle = keyword; // H1 uses keyword; a dedicated title agent can replace this
+      const articleTitle = keyword;
       const allSectionTitles = sections.map((s) => s.title);
 
-      // H1
       const h1Html = `<h1 style="font-size:2.2em;font-weight:800;line-height:1.3;margin:0 0 32px;color:#0f172a;">${articleTitle}</h1>\n\n`;
       setGeneratedContent(h1Html);
       let fullHtml = h1Html;
 
-      // ── PHASE 2: Write each section using the user's headings ────────────
+      // ── PHASE 2+3: WRITE + QA each section ───────────────────────────────
       for (let i = 0; i < sections.length; i++) {
         const section = sections[i];
         setStatus("WRITING_SECTION");
@@ -87,31 +83,40 @@ export function useContentEngine() {
         });
 
         if (!writerRes.ok) {
-          console.warn(`[ENGINE] Writing failed for section ${i}: "${section.title}" — skipping`);
+          console.warn(`[ENGINE] Writer failed for section ${i}: "${section.title}" — skipping`);
           continue;
         }
         const { chunk: draftChunk } = await writerRes.json();
 
-        // ── QA pass ────────────────────────────────────────────────────────
+        // ── QA — NEVER crash on editor failure ────────────────────────────
         setStatus("QA_CHECK");
-        const editorRes = await fetch("/api/v2/generator/editor", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            language: targetLanguage,
-            generatedChunk: draftChunk,
-            sectionPlan: section,
-          }),
-        });
-        const { chunk: finalChunk } = editorRes.ok
-          ? await editorRes.json()
-          : { chunk: draftChunk };
+        let finalChunk = draftChunk;
+
+        try {
+          const editorRes = await fetch("/api/v2/generator/editor", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              language: targetLanguage,
+              generatedChunk: draftChunk,
+              sectionPlan: section,
+            }),
+          });
+          // Editor now always returns 200 — use its chunk regardless of status field
+          if (editorRes.ok) {
+            const editorData = await editorRes.json();
+            finalChunk = editorData.chunk || draftChunk;
+          }
+        } catch (editorErr) {
+          // Network error on editor — use draft chunk, log and continue
+          console.warn(`[ENGINE] Editor network error for section ${i} — using draft`, editorErr);
+        }
 
         fullHtml += finalChunk + "\n\n";
         setGeneratedContent(fullHtml);
       }
 
-      // ── PHASE 3: SEO metadata ─────────────────────────────────────────────
+      // ── PHASE 4: SEO METADATA ─────────────────────────────────────────────
       setStatus("GENERATING_SEO");
       try {
         const seoRes = await fetch("/api/v2/generator/seo-meta", {
@@ -126,9 +131,7 @@ export function useContentEngine() {
           }),
         });
         if (seoRes.ok) setSeoMetadata(await seoRes.json());
-      } catch {
-        // Non-critical — user can fill in manually
-      }
+      } catch { /* non-critical */ }
 
       setStatus("COMPLETED");
       setCurrentSectionName("");
@@ -143,11 +146,11 @@ export function useContentEngine() {
 }
 
 // ---------------------------------------------------------------------------
-// Convert flat OutlineHeading[] into section objects the writer can consume.
-// Each H2 becomes a section; its immediate H3/H4 children become subHeadings.
+// Convert flat OutlineHeading[] into section objects the writer consumes.
+// Each H2 → section; H3/H4 children → subHeadings array.
 // ---------------------------------------------------------------------------
 function buildSectionsFromHeadings(headings: OutlineHeading[]) {
-  const sections: Array<{
+  type Section = {
     title: string;
     headingLevel: string;
     subHeadings: string[];
@@ -156,38 +159,33 @@ function buildSectionsFromHeadings(headings: OutlineHeading[]) {
     includeH3: boolean;
     maxParagraphSentences: number;
     entitiesToInclude: string[];
-  }> = [];
+  };
 
-  let currentSection: (typeof sections)[0] | null = null;
+  const sections: Section[] = [];
+  let current: Section | null = null;
   let h2Counter = 0;
+
+  const formats = ["paragraph", "bullet_list", "html_table", "key_points", "blockquote", "paragraph"];
 
   for (const h of headings) {
     if (h.level === "h2") {
-      if (currentSection) sections.push(currentSection);
+      if (current) sections.push(current);
       h2Counter++;
-
-      // Assign format variety across sections
-      const formats = ["paragraph", "bullet_list", "html_table", "key_points", "blockquote", "paragraph"];
-      const requiredFormat = formats[h2Counter % formats.length];
-
-      currentSection = {
+      current = {
         title: h.text,
         headingLevel: "h2",
         subHeadings: [],
-        requiredFormat,
-        // Place an image every 2 H2 sections
+        requiredFormat: formats[h2Counter % formats.length],
         includeImage: h2Counter % 2 === 1,
         includeH3: false,
         maxParagraphSentences: 2,
         entitiesToInclude: [],
       };
-    } else if ((h.level === "h3" || h.level === "h4") && currentSection) {
-      currentSection.subHeadings.push(`${h.level.toUpperCase()}: ${h.text}`);
-      currentSection.includeH3 = true;
+    } else if ((h.level === "h3" || h.level === "h4") && current) {
+      current.subHeadings.push(`${h.level.toUpperCase()}: ${h.text}`);
+      current.includeH3 = true;
     }
   }
-
-  if (currentSection) sections.push(currentSection);
-
+  if (current) sections.push(current);
   return sections;
 }

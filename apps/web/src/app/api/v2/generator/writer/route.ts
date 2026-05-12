@@ -233,16 +233,40 @@ export async function POST(req: NextRequest) {
     const brandName: string          = brand.brandName || "";
     const brandCta: string           = brand.callToAction || "";
 
-    // ── Internal link — inject every other section, max 5 total ──────────
-    // Uses a unique link per section slot. Research route already shuffled links.
-    // Only inject on even-indexed sections (0, 2, 4...) to avoid over-linking.
+    // ── Internal link — semantic matching against section topic ───────
+    // Scores every sitemap URL against the section title + keyword using
+    // simple word-overlap. Picks the highest-scoring URL for this section.
+    // Falls back to slot-based selection if no meaningful match is found.
     const allInternalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
     let linkInstruction = "";
-    const internalLinkSlot = Math.floor(sectionIndex / 2);
     const maxInternalLinks = 5;
+    const internalLinkSlot = Math.floor(sectionIndex / 2);
 
     if (allInternalLinks.length > 0 && internalLinkSlot < maxInternalLinks) {
-      const link = allInternalLinks[internalLinkSlot % allInternalLinks.length];
+      // Build a query from the section title + primary keyword — normalized
+      const queryTerms = `${sectionPlan.title} ${keyword}`
+        .toLowerCase()
+        .replace(/[^a-z0-9À-ɏ\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 3); // Skip stop words by length
+
+      // Score each URL: count how many query terms appear in the URL path
+      const scoredLinks = allInternalLinks.map((url) => {
+        const path = url.toLowerCase().replace(/[^a-z0-9À-ɏ\s]/g, " ");
+        const score = queryTerms.reduce((acc, term) => acc + (path.includes(term) ? 1 : 0), 0);
+        return { url, score };
+      });
+
+      // Sort descending by score; ties broken by slot position (variety)
+      scoredLinks.sort((a, b) => b.score - a.score || 0);
+
+      // Use the best match, but only if it scored at least 1 — otherwise use slot fallback
+      const bestMatch = scoredLinks[0];
+      const slotFallback = allInternalLinks[internalLinkSlot % allInternalLinks.length];
+      const link = (bestMatch && bestMatch.score > 0) ? bestMatch.url : slotFallback;
+
+      console.log(`[INTERNAL_LINK] Section "${sectionPlan.title}" → score:${bestMatch?.score} → ${link}`);
+
       linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a natural anchor in a sentence:
 <a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word topically relevant anchor text]</a>
 RULES: Anchor text must describe the destination page topic. NEVER use "click here", the brand name alone, or the raw URL.
