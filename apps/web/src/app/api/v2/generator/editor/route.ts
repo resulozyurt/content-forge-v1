@@ -45,7 +45,9 @@ function detectRepetition(html: string, sectionTitle: string): string[] {
 
   let titleWordRepeats = 0;
   titleWords.forEach((word) => {
-    const matches = content.match(new RegExp(`\\b${word}\\b`, "g")) || [];
+    // Escape special regex characters so titles like "OSA?" or "causes)" don't crash RegExp
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const matches = content.match(new RegExp(`\\b${escaped}\\b`, "g")) || [];
     if (matches.length > 4) titleWordRepeats++;
   });
 

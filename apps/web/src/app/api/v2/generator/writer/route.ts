@@ -24,46 +24,56 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" })
 async function generateImageWithGemini(prompt: string): Promise<string | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn("[GEMINI_IMAGE] GEMINI_API_KEY not set — skipping image generation");
+    console.warn("[GEMINI_IMAGE] GEMINI_API_KEY not set");
     return null;
   }
 
-  const model = "gemini-3.1-flash-image-preview";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  // Model fallback chain — try each until one succeeds
+  const models = [
+    "gemini-3.1-flash-image-preview",
+    "gemini-2.0-flash-exp-image-generation",
+    "gemini-2.5-flash-image-preview",
+  ];
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        // Must be generationConfig (top-level key) in the raw REST body
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    if (!res.ok) {
-      const errText = await res.text();
-      console.warn(`[GEMINI_IMAGE] ${res.status}:`, errText.slice(0, 300));
-      return null;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.warn(`[GEMINI_IMAGE] model=${model} status=${res.status}:`, errText.slice(0, 150));
+        continue; // Try next model
+      }
+
+      const data = await res.json();
+      const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
+      const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
+
+      if (!imgPart?.inlineData?.data) {
+        console.warn(`[GEMINI_IMAGE] model=${model} — no inlineData in response`);
+        continue; // Try next model
+      }
+
+      console.log(`[GEMINI_IMAGE] Success with model=${model}`);
+      return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+    } catch (err: any) {
+      console.warn(`[GEMINI_IMAGE] model=${model} fetch error:`, err.message);
+      continue; // Try next model
     }
-
-    const data = await res.json();
-    // Shape: candidates[0].content.parts[] — find the part with inlineData
-    const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
-    const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
-
-    if (!imgPart?.inlineData?.data) {
-      console.warn("[GEMINI_IMAGE] Response OK but no inlineData found:", JSON.stringify(parts).slice(0, 200));
-      return null;
-    }
-
-    return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
-  } catch (err: any) {
-    console.warn("[GEMINI_IMAGE] Request failed:", err.message);
-    return null;
   }
+
+  console.warn("[GEMINI_IMAGE] All models failed — returning null");
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +383,9 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    // ── Image — Gemini 3.1 Flash Image Preview (Nano Banana 2) ────────────
+    // ── Image — generated for every section (one per H2) ───────────────────
     let imgHtml = "";
-    if (sectionPlan.includeImage) {
+    if (true) { // Every section gets an image
       try {
         const imgPromptRes = await anthropic.messages.create({
           model: "claude-sonnet-4-6", max_tokens: 100,
