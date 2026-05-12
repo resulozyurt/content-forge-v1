@@ -1,39 +1,23 @@
 // apps/web/src/components/generator/OutlineBuilder.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
-    DndContext,
-    closestCenter,
-    KeyboardSensor,
-    PointerSensor,
-    useSensor,
-    useSensors,
-    DragEndEvent,
+    DndContext, closestCenter, KeyboardSensor, PointerSensor,
+    useSensor, useSensors, DragEndEvent,
 } from "@dnd-kit/core";
 import {
-    arrayMove,
-    SortableContext,
-    sortableKeyboardCoordinates,
-    verticalListSortingStrategy,
-    useSortable,
+    arrayMove, SortableContext, sortableKeyboardCoordinates,
+    verticalListSortingStrategy, useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-    GripVertical,
-    Trash2,
-    ListTree,
-    FileText,
-    CheckCircle2,
-    Sparkles,
-    Loader2,
-    PlusCircle,
-    RefreshCw,
+    GripVertical, Trash2, ListTree, FileText, CheckCircle2,
+    Sparkles, Loader2, PlusCircle, RefreshCw, Pencil, Check, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, ResearchResultData, GeneratorConfigData } from "@/types/generator";
 
-// h4 dahil — types/generator.ts ile eşleşmeli
 type HeadingLevel = "h2" | "h3" | "h4";
 
 interface HeadingItem {
@@ -49,17 +33,47 @@ interface OutlineBuilderProps {
 }
 
 // ---------------------------------------------------------------------------
-// Sortable item
+// Sortable heading item with inline editing
 // ---------------------------------------------------------------------------
 function SortableHeadingItem({
-    item,
-    onRemove,
+    item, onRemove, onUpdate,
 }: {
     item: HeadingItem;
     onRemove: (id: string) => void;
+    onUpdate: (id: string, text: string) => void;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
         useSortable({ id: item.id });
+
+    const [isEditing, setIsEditing] = useState(false);
+    const [editValue, setEditValue] = useState(item.text);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (isEditing) inputRef.current?.focus();
+    }, [isEditing]);
+
+    const startEdit = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setEditValue(item.text);
+        setIsEditing(true);
+    };
+
+    const saveEdit = () => {
+        const trimmed = editValue.trim();
+        if (trimmed && trimmed !== item.text) onUpdate(item.id, trimmed);
+        setIsEditing(false);
+    };
+
+    const cancelEdit = () => {
+        setEditValue(item.text);
+        setIsEditing(false);
+    };
+
+    const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === "Enter") saveEdit();
+        if (e.key === "Escape") cancelEdit();
+    };
 
     const style = { transform: CSS.Transform.toString(transform), transition };
 
@@ -74,29 +88,79 @@ function SortableHeadingItem({
             ref={setNodeRef}
             style={style}
             className={cn(
-                "flex items-center gap-3 p-3 rounded-lg border bg-white dark:bg-gray-900 transition-all",
+                "flex items-center gap-2 p-2.5 rounded-lg border bg-white dark:bg-gray-900 transition-all group",
                 isDragging
                     ? "border-indigo-300 shadow-lg opacity-80"
                     : "border-gray-200 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-800"
             )}
         >
+            {/* Drag handle — disabled while editing */}
             <button
                 {...attributes}
-                {...listeners}
-                className="text-gray-300 hover:text-gray-500 cursor-grab active:cursor-grabbing"
+                {...(isEditing ? {} : listeners)}
+                tabIndex={-1}
+                className={cn(
+                    "text-gray-300 flex-shrink-0 transition-colors",
+                    isEditing ? "cursor-default opacity-20" : "hover:text-gray-500 cursor-grab active:cursor-grabbing"
+                )}
             >
-                <GripVertical size={16} />
+                <GripVertical size={15} />
             </button>
-            <span className={cn("font-bold uppercase tracking-wider text-[10px] py-1 px-2 rounded w-8 text-center flex-shrink-0", levelColors[item.level])}>
+
+            {/* Level badge */}
+            <span className={cn(
+                "font-bold uppercase tracking-wider text-[10px] py-1 px-2 rounded w-8 text-center flex-shrink-0",
+                levelColors[item.level]
+            )}>
                 {item.level}
             </span>
-            <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200">{item.text}</span>
-            <button
-                onClick={() => onRemove(item.id)}
-                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-            >
-                <Trash2 size={14} />
-            </button>
+
+            {/* Text — edit mode or display */}
+            {isEditing ? (
+                <input
+                    ref={inputRef}
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    onKeyDown={onKeyDown}
+                    onBlur={saveEdit}
+                    className="flex-1 text-sm font-medium bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-300 dark:border-indigo-600 rounded px-2 py-1 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+            ) : (
+                <span
+                    className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200 truncate cursor-text"
+                    onDoubleClick={startEdit}
+                    title="Double-click to edit"
+                >
+                    {item.text}
+                </span>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex items-center gap-1 flex-shrink-0">
+                {isEditing ? (
+                    <>
+                        <button onClick={saveEdit} title="Save (Enter)"
+                            className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded transition-colors">
+                            <Check size={13} />
+                        </button>
+                        <button onClick={cancelEdit} title="Cancel (Esc)"
+                            className="p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors">
+                            <X size={13} />
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        <button onClick={startEdit} title="Edit heading"
+                            className="p-1.5 text-gray-300 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded transition-colors opacity-0 group-hover:opacity-100">
+                            <Pencil size={13} />
+                        </button>
+                        <button onClick={() => onRemove(item.id)} title="Remove"
+                            className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors">
+                            <Trash2 size={13} />
+                        </button>
+                    </>
+                )}
+            </div>
         </div>
     );
 }
@@ -125,26 +189,20 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
             const targetBrandDesc = activeConfig?.enableBrandVoice ? activeConfig.customBrandDesc || "" : "";
             const avoidList = Array.from(new Set([...allPreviousHeadings, ...myOutline.map((h) => h.text)]));
 
-            const response = await fetch("/api/generate/outline", {
+            const res = await fetch("/api/generate/outline", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    topic: targetTopic,
-                    researchData,
-                    language: targetLanguage,
-                    brandName: targetBrand,
-                    brandDesc: targetBrandDesc,
-                    previousHeadings: avoidList,
+                    topic: targetTopic, researchData, language: targetLanguage,
+                    brandName: targetBrand, brandDesc: targetBrandDesc, previousHeadings: avoidList,
                 }),
             });
-
-            if (!response.ok) throw new Error("AI Outline generation failed.");
-            const data = await response.json();
+            if (!res.ok) throw new Error("AI Outline generation failed.");
+            const data = await res.json();
 
             if (data.outline) {
                 const formatted: HeadingItem[] = data.outline.map((h: any, i: number) => ({
                     id: `ai-${i}-${Date.now()}`,
-                    // h1 geldiyse h2'ye düşür, bilinmeyen level h2 olsun
                     level: (["h2", "h3", "h4"].includes(h.level) ? h.level : "h2") as HeadingLevel,
                     text: h.text,
                 }));
@@ -153,8 +211,8 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                     Array.from(new Set([...prev, ...formatted.map((h) => h.text)]))
                 );
             }
-        } catch (error) {
-            console.error(error);
+        } catch (err) {
+            console.error(err);
             alert("Failed to generate AI outline. Please try again.");
         } finally {
             setIsAIGenerating(false);
@@ -162,56 +220,39 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
     };
 
     const handleAddFromCompetitor = (heading: { level: string; text: string }) => {
-        const safeLevel = (["h2", "h3", "h4"].includes(heading.level) ? heading.level : "h2") as HeadingLevel;
-        setMyOutline((prev) => [
-            ...prev,
-            { id: `comp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`, level: safeLevel, text: heading.text },
-        ]);
+        const safe = (["h2", "h3", "h4"].includes(heading.level) ? heading.level : "h2") as HeadingLevel;
+        setMyOutline((p) => [...p, { id: `comp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, level: safe, text: heading.text }]);
     };
 
     const handleAddCustom = (e: React.FormEvent) => {
         e.preventDefault();
         if (!customHeading.trim()) return;
-        setMyOutline((prev) => [
-            ...prev,
-            { id: `custom-${Date.now()}`, level: customLevel, text: customHeading.trim() },
-        ]);
+        setMyOutline((p) => [...p, { id: `custom-${Date.now()}`, level: customLevel, text: customHeading.trim() }]);
         setCustomHeading("");
     };
 
-    const handleRemove = (id: string) => setMyOutline((prev) => prev.filter((item) => item.id !== id));
+    const handleRemove = (id: string) => setMyOutline((p) => p.filter((h) => h.id !== id));
+    const handleUpdate = (id: string, text: string) => setMyOutline((p) => p.map((h) => h.id === id ? { ...h, text } : h));
 
     const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
         if (over && active.id !== over.id) {
             setMyOutline((items) => {
-                const oldIndex = items.findIndex((item) => item.id === active.id);
-                const newIndex = items.findIndex((item) => item.id === over.id);
-                return arrayMove(items, oldIndex, newIndex);
+                const old = items.findIndex((h) => h.id === active.id);
+                const nw = items.findIndex((h) => h.id === over.id);
+                return arrayMove(items, old, nw);
             });
         }
     };
 
     const handleFinalize = () => {
-        if (myOutline.length === 0) {
-            alert("Please add at least one heading before proceeding.");
-            return;
-        }
-        const selectedKeywords = researchData.keywords
-            ? researchData.keywords.filter((kw: any) => kw.selected).map((kw: any) => kw.text)
-            : [];
-        const competitorUrls = researchData.competitors
-            ? researchData.competitors.filter((c: any) => c.selected).map((c: any) => c.url)
-            : [];
-
-        const finalData: FinalOutlineData = {
-            // level artık 'h2' | 'h3' | 'h4' — types/generator.ts ile uyumlu
+        if (!myOutline.length) { alert("Please add at least one heading before proceeding."); return; }
+        const selectedKeywords = researchData.keywords?.filter((kw: any) => kw.selected).map((kw: any) => kw.text) ?? [];
+        const competitorUrls = researchData.competitors?.filter((c: any) => c.selected).map((c: any) => c.url) ?? [];
+        onGenerateArticle({
             headings: myOutline.map((h) => ({ id: h.id, level: h.level, text: h.text })),
-            selectedKeywords,
-            sourceUrls: competitorUrls,
-            config: activeConfig ?? undefined,
-        };
-        onGenerateArticle(finalData);
+            selectedKeywords, sourceUrls: competitorUrls, config: activeConfig ?? undefined,
+        });
     };
 
     const h2Count = myOutline.filter((h) => h.level === "h2").length;
@@ -224,28 +265,24 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                        <ListTree className="w-6 h-6 text-indigo-500" />
-                        Outline Architect
+                        <ListTree className="w-6 h-6 text-indigo-500" /> Outline Architect
                     </h2>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                        Engineer your document structure. Inject competitor headings, draft with AI, or craft custom sections.
+                        Build your structure. <span className="text-indigo-500 font-medium">Double-click</span> any heading to edit it inline.
                     </p>
                 </div>
                 <div className="flex items-center gap-3">
                     <button
                         onClick={handleAIDraftOutline}
                         disabled={isAIGenerating}
-                        title={myOutline.length > 0 ? "Re-generate with a fresh angle" : "Generate AI outline"}
                         className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-4 py-2 rounded-lg font-bold shadow-md hover:scale-105 transition-all disabled:opacity-50"
                     >
-                        {isAIGenerating ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : myOutline.length > 0 ? (
-                            <RefreshCw className="w-4 h-4" />
-                        ) : (
-                            <Sparkles className="w-4 h-4" />
-                        )}
-                        {isAIGenerating ? "Synthesizing..." : myOutline.length > 0 ? "Regenerate (New Angle)" : "AI Draft Outline"}
+                        {isAIGenerating ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : myOutline.length > 0 ? <RefreshCw className="w-4 h-4" />
+                                : <Sparkles className="w-4 h-4" />}
+                        {isAIGenerating ? "Synthesizing..."
+                            : myOutline.length > 0 ? "Regenerate (New Angle)"
+                                : "AI Draft Outline"}
                     </button>
                     <div className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-900/20 px-4 py-2 rounded-lg border border-indigo-100 dark:border-indigo-800/50 text-sm font-bold text-indigo-700 dark:text-indigo-400">
                         <span>Total: {myOutline.length}</span>
@@ -266,19 +303,16 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                             <FileText className="w-5 h-5 text-blue-500" /> SERP Topologies
                         </h3>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
                         {researchData?.competitors?.filter((c: any) => c.selected).map((comp: any, idx: number) => (
-                            <div key={idx} className="space-y-3">
+                            <div key={idx} className="space-y-2">
                                 <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300 sticky top-0 bg-white/90 dark:bg-gray-900/90 backdrop-blur-sm py-2 border-b border-gray-100 dark:border-gray-800 z-10 truncate">
                                     {comp.title}
                                 </h4>
-                                <div className="space-y-2 pl-2">
+                                <div className="space-y-1 pl-2">
                                     {comp.headings?.map((heading: any, hIdx: number) => (
-                                        <button
-                                            key={hIdx}
-                                            onClick={() => handleAddFromCompetitor(heading)}
-                                            className="w-full flex items-start gap-3 p-2.5 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50 dark:hover:border-blue-900/50 dark:hover:bg-blue-900/20 text-left transition-colors group"
-                                        >
+                                        <button key={hIdx} onClick={() => handleAddFromCompetitor(heading)}
+                                            className="w-full flex items-start gap-3 p-2 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50 dark:hover:border-blue-900/50 dark:hover:bg-blue-900/20 text-left transition-colors group">
                                             <span className={cn(
                                                 "font-bold uppercase tracking-wider text-[10px] py-1 px-2 rounded w-8 text-center flex-shrink-0 mt-0.5",
                                                 heading.level === "h2" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400"
@@ -290,7 +324,7 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                                             <span className="flex-1 text-sm text-gray-600 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
                                                 {heading.text}
                                             </span>
-                                            <PlusCircle size={14} className="text-blue-400 opacity-0 group-hover:opacity-100 flex-shrink-0 mt-0.5 transition-opacity" />
+                                            <PlusCircle size={13} className="text-blue-400 opacity-0 group-hover:opacity-100 flex-shrink-0 mt-1 transition-opacity" />
                                         </button>
                                     ))}
                                 </div>
@@ -307,26 +341,20 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                         </h3>
                     </div>
 
-                    {/* Custom heading input */}
-                    <div className="p-4 border-b border-gray-100 dark:border-gray-800">
+                    {/* Custom input */}
+                    <div className="p-3 border-b border-gray-100 dark:border-gray-800">
                         <form onSubmit={handleAddCustom} className="flex gap-2">
-                            <select
-                                value={customLevel}
-                                onChange={(e) => setCustomLevel(e.target.value as HeadingLevel)}
-                                className="text-xs font-bold border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-2 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300"
-                            >
+                            <select value={customLevel} onChange={(e) => setCustomLevel(e.target.value as HeadingLevel)}
+                                className="text-xs font-bold border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-2 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                                 <option value="h2">H2</option>
                                 <option value="h3">H3</option>
                                 <option value="h4">H4</option>
                             </select>
-                            <input
-                                type="text"
-                                value={customHeading}
-                                onChange={(e) => setCustomHeading(e.target.value)}
+                            <input type="text" value={customHeading} onChange={(e) => setCustomHeading(e.target.value)}
                                 placeholder="Inject custom heading directive..."
-                                className="flex-1 text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                            />
-                            <button type="submit" className="px-4 py-2 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 text-sm font-bold rounded-lg hover:bg-gray-700 transition-colors">
+                                className="flex-1 text-sm border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                            <button type="submit"
+                                className="px-4 py-2 bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 text-sm font-bold rounded-lg hover:bg-gray-700 transition-colors">
                                 Add
                             </button>
                         </form>
@@ -341,10 +369,10 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                             </div>
                         ) : (
                             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                                <SortableContext items={myOutline.map((item) => item.id)} strategy={verticalListSortingStrategy}>
-                                    <div className="space-y-2">
+                                <SortableContext items={myOutline.map((h) => h.id)} strategy={verticalListSortingStrategy}>
+                                    <div className="space-y-1.5">
                                         {myOutline.map((item) => (
-                                            <SortableHeadingItem key={item.id} item={item} onRemove={handleRemove} />
+                                            <SortableHeadingItem key={item.id} item={item} onRemove={handleRemove} onUpdate={handleUpdate} />
                                         ))}
                                     </div>
                                 </SortableContext>
@@ -354,11 +382,8 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
 
                     {/* Finalize */}
                     <div className="p-4 border-t border-gray-100 dark:border-gray-800">
-                        <button
-                            onClick={handleFinalize}
-                            disabled={myOutline.length === 0}
-                            className="w-full flex items-center justify-center py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-xl shadow-md hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 transition-all hover:scale-[1.02]"
-                        >
+                        <button onClick={handleFinalize} disabled={myOutline.length === 0}
+                            className="w-full flex items-center justify-center py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-xl shadow-md hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 transition-all hover:scale-[1.02]">
                             <CheckCircle2 className="w-5 h-5 mr-2" />
                             Lock Architecture & Initialize Production
                         </button>
