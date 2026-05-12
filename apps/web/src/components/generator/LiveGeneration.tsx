@@ -32,6 +32,9 @@ const DOMPURIFY_CONFIG = {
         "width", "height", "loading",
         "colspan", "rowspan",
     ],
+    // Allow data: URIs so Gemini base64 images are not stripped by DOMPurify
+    ALLOW_DATA_URI_TAGS: ["img"],
+    ADD_URI_SAFE_ATTR: ["src"],
     ALLOW_UNKNOWN_PROTOCOLS: false,
     FORCE_BODY: false,
 };

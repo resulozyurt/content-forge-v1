@@ -340,13 +340,26 @@ RULES: Both links MUST appear. Stats must include real numbers. Use ONLY these e
       brandName &&
       (sectionIndex === 1 || sectionIndex === 3 || sectionIndex >= 5);
 
+    // Brand description and features from /brand config for richer placement
+    const brandDesc: string  = brand.description || "";
+    const brandFeatures: string = brand.keyFeatures || brand.features || "";
+
     const brandInstruction = isBrandSection
-      ? `[BRAND VOICE — MANDATORY FOR THIS SECTION]:
-Naturally weave "${brandName}" into the content ONCE. Rules:
-1. Position ${brandName} as the recommended solution for the challenge discussed in this section.
-2. Educational, not salesy: "Teams using ${brandName} report..." or "Platforms like ${brandName}..."
-3. If contextually appropriate, close with: "${brandCta}"
-4. Do NOT force it — if the topic has zero connection to the brand, skip entirely.`
+      ? `[BRAND VOICE — REQUIRED IN THIS SECTION]:
+Weave "${brandName}" into the narrative NATURALLY — not in the last paragraph, but integrated where it fits the topic flow.
+
+Placement rules:
+1. EARLY placement: Mention ${brandName} within the first or second paragraph of this section, not at the end.
+2. CONTEXTUAL framing: Connect the brand to the specific problem or insight being discussed here.
+   Example patterns:
+   - "...which is exactly the problem ${brandName} was built to solve."
+   - "Platforms like ${brandName} address this by..."
+   - "Teams running ${brandName} report [specific outcome related to this section's topic]."
+3. Use these brand facts to make the mention specific and credible:
+   ${brandDesc ? `Brand description: ${brandDesc.slice(0, 200)}` : ""}
+   ${brandFeatures ? `Key capabilities: ${brandFeatures.slice(0, 200)}` : ""}
+4. ONE mention only — but make it earn its place with a real benefit claim, not a generic namecheck.
+5. Only add CTA if this section naturally concludes a point: "${brandCta}"`
       : "";
 
     // ── Sub-headings — cover every H3/H4 the user added ───────────────────
