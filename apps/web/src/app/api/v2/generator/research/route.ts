@@ -82,6 +82,62 @@ export async function POST(req: NextRequest) {
     ).filter(Boolean);
     const gaps: string[] = body.gaps || [];
 
+    // ── Pre-fetch authority citations once — writer reads from this pool ───
+    // This replaces 2 Serper calls × N sections with a single call here.
+    // Cost: 1 Serper query instead of 16 = ~$0.30 saved per article.
+    let preFetchedCitations: Array<{ url: string; label: string }> = [];
+    const STATIC_CITATION_FALLBACKS = [
+      { url: "https://www.mckinsey.com/capabilities/operations/our-insights", label: "McKinsey & Company" },
+      { url: "https://www.statista.com/topics/market-research", label: "Statista" },
+      { url: "https://www.ibm.com/think/topics/ai-for-business", label: "IBM Institute for Business Value" },
+      { url: "https://www.deloitte.com/global/en/about/press-room/deloitte-insights.html", label: "Deloitte Insights" },
+      { url: "https://www.gartner.com/en/newsroom/press-releases", label: "Gartner" },
+      { url: "https://hbr.org/topic/subject/strategy", label: "Harvard Business Review" },
+      { url: "https://www.forbes.com/sites/forbesbusinesscouncil/", label: "Forbes Business Council" },
+      { url: "https://nrf.com/blog", label: "NRF" },
+      { url: "https://contentmarketinginstitute.com/articles/", label: "Content Marketing Institute" },
+      { url: "https://moz.com/blog", label: "Moz" },
+    ];
+
+    const BLOCKED = ["reddit.com","quora.com","linkedin.com","facebook.com","twitter.com","pinterest.com","amazon.","youtube.com","g2.com"];
+    const PREFERRED = ["hbr.org","mckinsey.com","deloitte.com","ibm.com","gartner.com","statista.com","nrf.com","osha.gov","contentmarketinginstitute.com","moz.com","hubspot.com","techcrunch.com","forbes.com","venturebeat.com"];
+
+    try {
+      const serperKey = process.env.SERPER_API_KEY;
+      if (serperKey) {
+        const citeRes = await fetch("https://google.serper.dev/search", {
+          method: "POST",
+          headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ q: `${safeKeyword} research statistics data`, num: 10 }),
+          signal: AbortSignal.timeout(6000),
+        });
+        if (citeRes.ok) {
+          const results: any[] = (await citeRes.json()).organic || [];
+          const clean = results.filter((r) => r.link && !BLOCKED.some((d) => r.link.toLowerCase().includes(d)));
+          // Sort: preferred domains first
+          clean.sort((a, b) => {
+            const aP = PREFERRED.some((d) => a.link.toLowerCase().includes(d)) ? 0 : 1;
+            const bP = PREFERRED.some((d) => b.link.toLowerCase().includes(d)) ? 0 : 1;
+            return aP - bP;
+          });
+          preFetchedCitations = clean.slice(0, 10).map((r) => {
+            try {
+              const domain = new URL(r.link).hostname.replace(/^www\./, "");
+              const label = domain.split(".").slice(0, -1).join(" ")
+                .replace(/-/g, " ").split(" ")
+                .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || domain;
+              return { url: r.link, label };
+            } catch { return { url: r.link, label: r.link }; }
+          });
+        }
+      }
+    } catch { /* silent fail — use static fallbacks */ }
+
+    // Pad with static fallbacks if fewer than 10 results
+    while (preFetchedCitations.length < 10) {
+      preFetchedCitations.push(STATIC_CITATION_FALLBACKS[preFetchedCitations.length % STATIC_CITATION_FALLBACKS.length]);
+    }
+
     const researchBlueprint = {
       keyword: safeKeyword,
       language: targetLanguage || "en-US",
@@ -89,6 +145,7 @@ export async function POST(req: NextRequest) {
       selectedKeywords,
       questions,
       gaps,
+      preFetchedCitations,
       extractedContext: {
         topHeaders: ["Core Concepts", "Benefits", "Implementation", "Cost Analysis"],
         mandatoryEntities: [safeKeyword],

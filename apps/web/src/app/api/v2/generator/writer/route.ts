@@ -63,11 +63,12 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Live citation lookup via Serper — returns real article URLs, not homepages
+// Citation pool reader — reads from pre-fetched citations in research blueprint.
+// No Serper call here — saves ~$0.30/article vs per-section fetching.
 // ---------------------------------------------------------------------------
 interface Citation { url: string; label: string }
 
-const STATIC_FALLBACKS: Citation[] = [
+const STATIC_CITATION_FALLBACKS: Citation[] = [
   { url: "https://www.mckinsey.com/capabilities/operations/our-insights", label: "McKinsey & Company" },
   { url: "https://www.statista.com/topics/market-research", label: "Statista" },
   { url: "https://www.ibm.com/think/topics/ai-for-business", label: "IBM Institute for Business Value" },
@@ -76,52 +77,17 @@ const STATIC_FALLBACKS: Citation[] = [
   { url: "https://hbr.org/topic/subject/strategy", label: "Harvard Business Review" },
 ];
 
-const PREFERRED_DOMAINS = [
-  "hbr.org", "mckinsey.com", "deloitte.com", "ibm.com", "gartner.com",
-  "statista.com", "nrf.com", "osha.gov", "constructiondive.com",
-  "contentmarketinginstitute.com", "moz.com", "hubspot.com",
-  "techcrunch.com", "venturebeat.com", "forbes.com",
-];
-
-const BLOCKED_DOMAINS = [
-  "reddit.com", "quora.com", "linkedin.com", "facebook.com", "twitter.com",
-  "pinterest.com", "amazon.", "youtube.com", "ideawake.com", "g2.com",
-];
-
-async function fetchLiveCitation(keyword: string, sectionTitle: string, fallbackIndex: number): Promise<Citation> {
-  const serperKey = process.env.SERPER_API_KEY;
-  if (!serperKey) return STATIC_FALLBACKS[fallbackIndex % STATIC_FALLBACKS.length];
-
-  try {
-    const res = await fetch("https://google.serper.dev/search", {
-      method: "POST",
-      headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ q: `${sectionTitle} ${keyword} statistics data research`, num: 10 }),
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) throw new Error(`Serper ${res.status}`);
-    const results: any[] = (await res.json()).organic || [];
-
-    const cleanResults = results.filter(
-      (r) => r.link && !BLOCKED_DOMAINS.some((d) => (r.link as string).toLowerCase().includes(d))
-    );
-    const preferred = cleanResults.find((r) =>
-      PREFERRED_DOMAINS.some((d) => (r.link as string).toLowerCase().includes(d))
-    );
-    const candidate = preferred ?? cleanResults[0];
-
-    if (candidate?.link) {
-      const domain = new URL(candidate.link).hostname.replace(/^www\./, "");
-      const label = domain.split(".").slice(0, -1).join(" ")
-        .replace(/-/g, " ").split(" ")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || domain;
-      console.log(`[CITATION_LIVE] "${sectionTitle}" → ${candidate.link}`);
-      return { url: candidate.link, label };
-    }
-  } catch (err: any) {
-    console.warn("[CITATION_LIVE] Serper failed:", err.message);
+function getCitationFromPool(
+  pool: Citation[],
+  sectionIndex: number,
+  offset: number = 0
+): Citation {
+  if (!pool || pool.length === 0) {
+    return STATIC_CITATION_FALLBACKS[(sectionIndex + offset) % STATIC_CITATION_FALLBACKS.length];
   }
-  return STATIC_FALLBACKS[fallbackIndex % STATIC_FALLBACKS.length];
+  // Use prime-number spacing so each section gets a different citation
+  const idx = ((sectionIndex * 3) + offset) % pool.length;
+  return pool[idx];
 }
 
 // ---------------------------------------------------------------------------
@@ -275,11 +241,10 @@ CRITICAL RULES:
 `;
     }
 
-    // ── Live citations — two per section, parallel fetch ─────────────────
-    const [cite1, cite2] = await Promise.all([
-      fetchLiveCitation(keyword, sectionPlan.title, sectionIndex),
-      fetchLiveCitation(keyword, `${sectionPlan.title} data statistics`, sectionIndex + 10),
-    ]);
+    // ── Citations from pre-fetched pool — zero additional API calls ─────
+    const citationPool: Citation[] = researchBlueprint.preFetchedCitations || [];
+    const cite1 = getCitationFromPool(citationPool, sectionIndex, 0);
+    const cite2 = getCitationFromPool(citationPool, sectionIndex, 1);
 
     linkInstruction += `[CITATIONS — MANDATORY — USE BOTH]:
 1. According to <a href="${cite1.url}" target="_blank" rel="nofollow" style="color:#2563eb;text-decoration:underline;">${cite1.label}</a>, [specific plausible stat with a real number].
@@ -366,16 +331,11 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
     // ── Image — every section ─────────────────────────────────────────────
+    // Image prompt built inline — no separate Claude call needed.
+    // Saves 1 Claude API call per section (~8 calls = ~$0.05/article).
     let imgHtml = "";
     try {
-      const imgPromptRes = await anthropic.messages.create({
-        model: "claude-sonnet-4-6", max_tokens: 100,
-        messages: [{ role: "user", content:
-          `Photorealistic editorial image for "${sectionPlan.title}" about "${keyword}". Professional, no text in image. Max 80 chars.` }],
-        temperature: 0.7,
-      });
-      const imgPromptBlock = imgPromptRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-      const imgPrompt = (imgPromptBlock?.text || `Professional editorial photo about ${keyword}`).slice(0, 80);
+      const imgPrompt = `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100);
       const imageDataUri = await generateImageWithGemini(imgPrompt);
       const imgSrc = imageDataUri
         ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;

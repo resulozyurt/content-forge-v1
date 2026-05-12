@@ -43,6 +43,9 @@ const PROSE_PURIFY_CONFIG = {
         "width", "height", "loading",
         "colspan", "rowspan",
     ],
+    // Allow data: URIs so Gemini base64 images are not stripped
+    ALLOW_DATA_URI_TAGS: ["img"],
+    ADD_URI_SAFE_ATTR: ["src"],
     ALLOW_UNKNOWN_PROTOCOLS: false,
     FORCE_BODY: false,
 };
@@ -52,7 +55,10 @@ const PROSE_PURIFY_CONFIG = {
 // ---------------------------------------------------------------------------
 const globalEditorExtensions = [
     StarterKit,
-    Image.configure({ inline: true }),
+    Image.configure({
+        inline: true,
+        allowBase64: true,  // Allow data:image/... URIs from Gemini
+    }),
     Link.configure({ openOnClick: false }),
     Table.configure({ resizable: false }),
     TableRow,
