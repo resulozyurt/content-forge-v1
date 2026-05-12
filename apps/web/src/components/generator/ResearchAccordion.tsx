@@ -293,7 +293,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </ul>
                                     )}
 
-                                    {step.id === "gaps" && data.gaps?.length > 0 && (
+                                    {step.id === "gaps" && (data.gaps?.length ?? 0) > 0 && (
                                         <div className="flex flex-wrap gap-2">
                                             {data.gaps.map((gap: string, i: number) => (
                                                 <span
