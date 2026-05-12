@@ -115,21 +115,12 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
         return () => clearTimeout(timer);
     }, [activeStepIndex, data]);
 
-    // ── PHASE 3: Auto-proceed once all steps complete and data is ready ──────
-    // No manual button click needed — fires onCompleteResearch automatically.
-    useEffect(() => {
-        const allDone = activeStepIndex >= RESEARCH_STEPS.length;
-        if (!allDone || !data || completedFired.current) return;
-
+    // ── PHASE 3: Manual proceed — user reviews results then clicks the button ───
+    const handleProceed = () => {
+        if (!data || completedFired.current) return;
         completedFired.current = true;
-
-        // Small delay so the user can see the final "completed" state before transitioning
-        const timer = setTimeout(() => {
-            onCompleteResearch(data);
-        }, 600);
-
-        return () => clearTimeout(timer);
-    }, [activeStepIndex, data, onCompleteResearch]);
+        onCompleteResearch(data);
+    };
 
     // ── Keyword / Competitor toggles ─────────────────────────────────────────
     const toggleKeyword = (index: number) => {
@@ -309,7 +300,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                     {step.id === "outline" && (
                                         <p className="text-sm text-gray-500 dark:text-gray-400 italic flex items-center gap-2">
                                             <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            Data consolidated — transitioning to Outline Architect...
+                                            Research data consolidated. Review your selections above, then proceed.
                                         </p>
                                     )}
                                 </div>
@@ -318,6 +309,19 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                     );
                 })}
             </div>
+
+            {/* Proceed button — visible only when all steps done and data ready */}
+            {isAllComplete && data && (
+                <div className="flex justify-end pt-2 animate-in fade-in zoom-in duration-500">
+                    <button
+                        onClick={handleProceed}
+                        className="inline-flex items-center justify-center gap-2 px-8 py-3.5 text-base font-bold text-white bg-green-600 hover:bg-green-700 rounded-xl shadow-md hover:scale-[1.02] transition-all"
+                    >
+                        Review Outline Matrix
+                        <ChevronDown className="w-5 h-5 -rotate-90" />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
