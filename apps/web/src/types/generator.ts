@@ -1,7 +1,7 @@
 // apps/web/src/types/generator.ts
 
 export type ContentType = 'blog_post' | 'pillar_page' | 'guide' | 'product_review' | 'service_page';
-export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o'; 
+export type AIModel = 'claude-sonnet-4-6' | 'gpt-4o';
 export type Language = 'en' | 'tr';
 export type ContentDepth = 'standard' | 'comprehensive' | 'exhaustive';
 export type Tone = 'professional' | 'casual' | 'educational' | 'persuasive' | 'authoritative';
@@ -14,11 +14,10 @@ export interface GeneratorConfigData {
   model: AIModel;
   depth: ContentDepth;
   tone: Tone;
-  targetLength: string;       
-  enableBrandVoice: boolean;  
+  targetLength: string;
+  enableBrandVoice: boolean;
   targetAudience: string;
-  wpSitemap?: string;         
-  // === FIX: TYPESCRIPT BUILD HATASI İÇİN EKLENDİ ===
+  wpSitemap?: string;
   customBrandName?: string;
   customBrandDesc?: string;
 }
@@ -35,7 +34,7 @@ export const initialConfigData: GeneratorConfigData = {
   targetAudience: '',
   wpSitemap: '',
   customBrandName: '',
-  customBrandDesc: ''
+  customBrandDesc: '',
 };
 
 export interface CompetitorData {
@@ -58,14 +57,15 @@ export interface ResearchResultData {
 export interface OutlineHeading {
   id: string;
   text: string;
-  level: 'h2' | 'h3';
+  // h4 desteği eklendi — OutlineBuilder ve generate/outline route ile uyumlu
+  level: 'h2' | 'h3' | 'h4';
 }
 
 export interface FinalOutlineData {
   headings: OutlineHeading[];
   selectedKeywords: string[];
   sourceUrls?: string[];
-  config?: GeneratorConfigData; 
+  config?: GeneratorConfigData;
 }
 
 export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image' | 'seo_metadata';
@@ -73,6 +73,6 @@ export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image' | 'seo_metada
 export interface GeneratedBlock {
   id: string;
   type: ContentBlockType;
-  content: any; 
+  content: any;
   metadata?: any;
 }

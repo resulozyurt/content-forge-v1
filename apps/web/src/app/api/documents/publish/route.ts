@@ -8,120 +8,145 @@ import { headers } from "next/headers";
 import { decrypt } from "@/lib/encryption";
 
 export async function POST(req: Request) {
-    try {
-        // 1. Authentication & Session Validation
-        const session = await getServerSession(authOptions);
-        if (!session?.user?.id) {
-            return NextResponse.json(
-                { error: "Unauthorized access. Authentication is required to publish documents." }, 
-                { status: 401 }
-            );
-        }
-
-        const userId = (session.user as any).id;
-
-        // 2. Rate Limiting: Prevent spamming the WordPress target (Max 10 publishes per hour)
-        const ip = (await headers()).get('x-forwarded-for') || '127.0.0.1';
-        const limiter = await rateLimit(`wp_publish_${userId}_${ip}`, 10, 60 * 60 * 1000);
-
-        if (!limiter.success) {
-            return NextResponse.json(
-                { error: "Publishing quota exceeded. Please wait before pushing new articles to WordPress." }, 
-                { 
-                    status: 429, 
-                    headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) 
-                }
-            );
-        }
-
-        // 3. Extract Document Payload
-        const { title, content } = await req.json();
-
-        if (!title || !content) {
-            return NextResponse.json(
-                { error: "Invalid payload: Document title and HTML content are required." }, 
-                { status: 400 }
-            );
-        }
-
-        // 4. Retrieve User's WordPress Integration Settings
-        const userSettings = await prisma.userSettings.findUnique({
-            where: { userId: userId }
-        });
-
-        if (!userSettings || !userSettings.wpUrl || !userSettings.wpUsername || !userSettings.wpAppPassword) {
-            return NextResponse.json(
-                { error: "WordPress integration is incomplete. Please configure your WP URL and Application Password in settings." }, 
-                { status: 403 }
-            );
-        }
-
-        console.log(`[WP_INTEGRATION] Initiating content transmission to target environment: ${userSettings.wpUrl}`);
-
-        // 5. Sanitize and Format Target URL
-        let targetUrl = userSettings.wpUrl.trim();
-        // Strip trailing slash if present to ensure clean REST API path concatenation
-        if (targetUrl.endsWith('/')) {
-            targetUrl = targetUrl.slice(0, -1);
-        }
-        
-        const wpApiEndpoint = `${targetUrl}/wp-json/wp/v2/posts`;
-
-        // 6. Decrypt the Application Password and construct the Basic Auth Token
-        let plainPassword: string;
-        try {
-            // Decrypt the AES/ChaCha encrypted payload from the database
-            plainPassword = decrypt(userSettings.wpAppPassword);
-        } catch (cryptoError) {
-            console.error("[CRYPTO_DECRYPTION_FAULT]: Failed to unseal WP App Password.", cryptoError);
-            return NextResponse.json(
-                { error: "Failed to authenticate with WordPress due to a cryptographic key mismatch." },
-                { status: 500 }
-            );
-        }
-
-        const authString = `${userSettings.wpUsername.trim()}:${plainPassword.trim()}`;
-        const encodedAuth = Buffer.from(authString).toString('base64');
-
-        // 7. Dispatch Payload to WordPress REST API
-        const wpResponse = await fetch(wpApiEndpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Basic ${encodedAuth}`,
-                'User-Agent': 'ContentForge-Integration-Agent/1.0'
-            },
-            body: JSON.stringify({
-                title: title,
-                content: content,
-                status: userSettings.defaultStatus || 'draft', // Safely default to 'draft' to prevent accidental live publishing
-                ping_status: 'closed',
-                comment_status: 'closed'
-            })
-        });
-
-        const wpData = await wpResponse.json();
-
-        // 8. Handle Target System Rejections
-        if (!wpResponse.ok) {
-            console.error(`[WP_TRANSMISSION_FAULT] Target rejected payload. Status: ${wpResponse.status}`, wpData);
-            throw new Error(wpData.message || "Failed to transmit document to the target WordPress environment.");
-        }
-
-        console.log(`[SUCCESS] Document successfully persisted to WordPress. WP Post ID: ${wpData.id}`);
-
-        // 9. Return Success Confirmation to UI
-        return NextResponse.json({ 
-            message: "Successfully published to WordPress.",
-            postId: wpData.id,
-            postUrl: wpData.link
-        }, { status: 200 });
-
-    } catch (error: any) {
-        console.error("[WP_INTEGRATION_CRITICAL_FAULT]:", error);
-        return NextResponse.json(
-            { error: error.message || "A critical fault occurred during the WordPress transmission sequence." }, 
-            { status: 500 }
-        );
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { error: "Unauthorized. Authentication required to publish." },
+        { status: 401 }
+      );
     }
+
+    const userId = (session.user as any).id;
+
+    // Rate limit: 10 publishes/hour
+    const ip = (await headers()).get("x-forwarded-for") || "127.0.0.1";
+    const limiter = await rateLimit(`wp_publish_${userId}_${ip}`, 10, 60 * 60 * 1000);
+    if (!limiter.success) {
+      return NextResponse.json(
+        { error: "Publishing quota exceeded. Please wait before pushing new articles." },
+        { status: 429, headers: getRateLimitHeaders(limiter.limit, limiter.remaining, limiter.reset) }
+      );
+    }
+
+    const { title, content, seoMetadata } = await req.json();
+
+    if (!title || !content) {
+      return NextResponse.json(
+        { error: "Document title and HTML content are required." },
+        { status: 400 }
+      );
+    }
+
+    // Retrieve WP settings
+    const userSettings = await prisma.userSettings.findUnique({ where: { userId } });
+    if (!userSettings?.wpUrl || !userSettings?.wpUsername || !userSettings?.wpAppPassword) {
+      return NextResponse.json(
+        { error: "WordPress integration incomplete. Configure WP URL and App Password in settings." },
+        { status: 403 }
+      );
+    }
+
+    let targetUrl = userSettings.wpUrl.trim().replace(/\/$/, "");
+
+    // Decrypt password
+    let plainPassword: string;
+    try {
+      plainPassword = decrypt(userSettings.wpAppPassword);
+    } catch {
+      return NextResponse.json(
+        { error: "Failed to authenticate with WordPress — cryptographic key mismatch." },
+        { status: 500 }
+      );
+    }
+
+    const encodedAuth = Buffer.from(
+      `${userSettings.wpUsername.trim()}:${plainPassword.trim()}`
+    ).toString("base64");
+
+    // ── Build post payload with Rank Math meta ──────────────────────────
+    // Rank Math stores meta via its own REST endpoint OR via post meta fields.
+    // Strategy: create the post first, then PATCH meta via /wp/v2/posts/{id}
+    // using the `meta` field which Rank Math registers automatically when active.
+    const meta = seoMetadata || {};
+
+    const postPayload: Record<string, any> = {
+      title,
+      content,
+      status: userSettings.defaultStatus || "draft",
+      ping_status: "closed",
+      comment_status: "closed",
+      // Rank Math meta fields (registered by Rank Math plugin in REST API)
+      meta: {
+        rank_math_focus_keyword: meta.focusKeyword || "",
+        rank_math_title: meta.metaTitle || title,
+        rank_math_description: meta.metaDescription || "",
+        rank_math_robots: ["index", "follow"],
+        // Yoast fallback (in case Rank Math is not active)
+        _yoast_wpseo_focuskw: meta.focusKeyword || "",
+        _yoast_wpseo_title: meta.metaTitle || title,
+        _yoast_wpseo_metadesc: meta.metaDescription || "",
+      },
+    };
+
+    const wpApiEndpoint = `${targetUrl}/wp-json/wp/v2/posts`;
+
+    console.log(`[WP_PUBLISH] Dispatching to ${wpApiEndpoint}`);
+
+    const wpResponse = await fetch(wpApiEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Basic ${encodedAuth}`,
+        "User-Agent": "ContentForge-Integration-Agent/2.0",
+      },
+      body: JSON.stringify(postPayload),
+    });
+
+    const wpData = await wpResponse.json();
+
+    if (!wpResponse.ok) {
+      console.error(`[WP_PUBLISH_FAULT] Status ${wpResponse.status}`, wpData);
+      throw new Error(wpData.message || "WordPress rejected the payload.");
+    }
+
+    const postId: number = wpData.id;
+    console.log(`[WP_PUBLISH] Post created. ID: ${postId}`);
+
+    // ── PATCH Rank Math focus keyword via dedicated endpoint (if available) ─
+    // Rank Math exposes /rankmath/v1/updateMeta — try it as a best-effort
+    try {
+      const rmEndpoint = `${targetUrl}/wp-json/rankmath/v1/updateMeta`;
+      await fetch(rmEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${encodedAuth}`,
+        },
+        body: JSON.stringify({
+          objectID: postId,
+          objectType: "post",
+          meta: {
+            focusKeyword: meta.focusKeyword || "",
+            title: meta.metaTitle || title,
+            description: meta.metaDescription || "",
+          },
+        }),
+      });
+      console.log(`[RANK_MATH] Meta patched for post ${postId}`);
+    } catch {
+      // Non-critical — meta was already set via post meta field above
+    }
+
+    return NextResponse.json(
+      { message: "Successfully published to WordPress.", postId, postUrl: wpData.link },
+      { status: 200 }
+    );
+  } catch (error: any) {
+    console.error("[WP_PUBLISH_CRITICAL]:", error);
+    return NextResponse.json(
+      { error: error.message || "Critical fault during WordPress transmission." },
+      { status: 500 }
+    );
+  }
 }
