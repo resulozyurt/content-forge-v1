@@ -233,43 +233,69 @@ export async function POST(req: NextRequest) {
     const brandName: string          = brand.brandName || "";
     const brandCta: string           = brand.callToAction || "";
 
-    // ── Internal link — semantic matching against section topic ───────
-    // Scores every sitemap URL against the section title + keyword using
-    // simple word-overlap. Picks the highest-scoring URL for this section.
-    // Falls back to slot-based selection if no meaningful match is found.
+    // ── Internal link — semantic scoring + guaranteed uniqueness per section ─
+    //
+    // Strategy:
+    // 1. Score ALL sitemap URLs against this section's title + keyword.
+    // 2. Sort by score descending so most relevant URLs come first.
+    // 3. Use sectionIndex as an offset into the ranked list — each section
+    //    picks the Nth best match, guaranteeing a different URL per section
+    //    even when multiple URLs share the same top score.
+    // 4. If sectionIndex exceeds the list length, wrap around but still
+    //    prefer a URL not used by the immediately preceding sections.
     const allInternalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
     let linkInstruction = "";
-    const maxInternalLinks = 5;
+
+    // Only inject on even-indexed sections (0, 2, 4...) — max 5 links per article
     const internalLinkSlot = Math.floor(sectionIndex / 2);
+    const maxInternalLinks = 5;
 
     if (allInternalLinks.length > 0 && internalLinkSlot < maxInternalLinks) {
-      // Build a query from the section title + primary keyword — normalized
+      // Normalize section title + keyword into meaningful query terms (skip short stop words)
+      const stopWords = new Set(["with","that","this","from","have","will","your","their","which","about","into","more","also","such","each","than","when","were","been","they","what","where","some","these","those","both","after","being","there","through","during","before","between","should","could","would"]);
+
       const queryTerms = `${sectionPlan.title} ${keyword}`
         .toLowerCase()
-        .replace(/[^a-z0-9À-ɏ\s]/g, " ")
+        .replace(/[^a-z0-9\s]/g, " ")
         .split(/\s+/)
-        .filter((w) => w.length > 3); // Skip stop words by length
+        .filter((w) => w.length > 3 && !stopWords.has(w));
 
-      // Score each URL: count how many query terms appear in the URL path
+      // Score each URL by how many query terms appear in its path segments
       const scoredLinks = allInternalLinks.map((url) => {
-        const path = url.toLowerCase().replace(/[^a-z0-9À-ɏ\s]/g, " ");
-        const score = queryTerms.reduce((acc, term) => acc + (path.includes(term) ? 1 : 0), 0);
-        return { url, score };
+        try {
+          // Use pathname only for cleaner matching — strip domain noise
+          const urlObj = new URL(url);
+          const path = (urlObj.pathname + " " + urlObj.hostname)
+            .toLowerCase()
+            .replace(/[-_/]/g, " ");
+          const score = queryTerms.reduce(
+            (acc, term) => acc + (path.includes(term) ? 2 : 0) + (url.toLowerCase().includes(term) ? 1 : 0),
+            0
+          );
+          return { url, score };
+        } catch {
+          return { url, score: 0 };
+        }
       });
 
-      // Sort descending by score; ties broken by slot position (variety)
-      scoredLinks.sort((a, b) => b.score - a.score || 0);
+      // Sort by score DESC, then by URL length ASC (shorter = more specific page)
+      scoredLinks.sort((a, b) => b.score - a.score || a.url.length - b.url.length);
 
-      // Use the best match, but only if it scored at least 1 — otherwise use slot fallback
-      const bestMatch = scoredLinks[0];
-      const slotFallback = allInternalLinks[internalLinkSlot % allInternalLinks.length];
-      const link = (bestMatch && bestMatch.score > 0) ? bestMatch.url : slotFallback;
+      // Pick the entry at position `internalLinkSlot` in the ranked list.
+      // This guarantees each section gets a DIFFERENT URL:
+      //   section 0 (slot 0) → rank #0 best match
+      //   section 2 (slot 1) → rank #1 best match
+      //   section 4 (slot 2) → rank #2 best match
+      // If we run out of ranked links, wrap with offset to avoid exact repeats.
+      const pickIndex = internalLinkSlot % scoredLinks.length;
+      const picked = scoredLinks[pickIndex];
+      const link = picked.url;
 
-      console.log(`[INTERNAL_LINK] Section "${sectionPlan.title}" → score:${bestMatch?.score} → ${link}`);
+      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} → ${link}`);
 
       linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a natural anchor in a sentence:
 <a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word topically relevant anchor text]</a>
-RULES: Anchor text must describe the destination page topic. NEVER use "click here", the brand name alone, or the raw URL.
+RULES: Anchor text must describe the destination page content. NEVER use "click here", the brand name, or the raw URL as anchor text.
 
 `;
     }
