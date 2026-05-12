@@ -1,8 +1,11 @@
 // apps/web/src/components/generator/ResearchAccordion.tsx
 "use client";
 
-import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Search, Target, Link as LinkIcon, HelpCircle, Layers, FileText, ChevronDown } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+    Loader2, CheckCircle2, Search, Target, Link as LinkIcon,
+    HelpCircle, Layers, FileText, ChevronDown,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, ResearchResultData } from "@/types/generator";
 
@@ -11,297 +14,310 @@ interface ResearchAccordionProps {
     onCompleteResearch: (data: ResearchResultData) => void;
 }
 
-const researchSteps = [
-    { id: 'intent', label: "Decoding Search Intent", icon: Target },
-    { id: 'keywords', label: "Expanding Keywords", icon: Search },
-    { id: 'serp', label: "Analyzing SERP", icon: LinkIcon },
-    { id: 'questions', label: "Finding Questions", icon: HelpCircle },
-    { id: 'gaps', label: "Finding Gaps", icon: Layers },
-    { id: 'outline', label: "Building Outline", icon: FileText },
+const RESEARCH_STEPS = [
+    { id: "intent", label: "Decoding Search Intent", icon: Target },
+    { id: "keywords", label: "Expanding Keywords", icon: Search },
+    { id: "serp", label: "Analyzing SERP", icon: LinkIcon },
+    { id: "questions", label: "Finding Questions", icon: HelpCircle },
+    { id: "gaps", label: "Finding Gaps", icon: Layers },
+    { id: "outline", label: "Building Outline", icon: FileText },
 ];
+
+const STEP_INTERVAL_MS = 1400; // Time between visual step advances
 
 export default function ResearchAccordion({ config, onCompleteResearch }: ResearchAccordionProps) {
     const [activeStepIndex, setActiveStepIndex] = useState(0);
     const [completedSteps, setCompletedSteps] = useState<string[]>([]);
     const [data, setData] = useState<ResearchResultData | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
-    // Execute the backend research pipeline and ingest the standardized payload
-    // FIX: Use config.query as dependency (stable primitive) instead of the config object reference,
-    // which changes on every render and causes the research API to be called twice.
-    const stableQuery = config.query || config.topic || "Default Topic";
+    // Prevent double-fire in React Strict Mode and re-renders
+    const fetchLock = useRef(false);
+    // Track whether onCompleteResearch has already been called
+    const completedFired = useRef(false);
+
+    const stableQuery = config.query || (config as any).topic || "Default Topic";
+
+    // ── PHASE 1: Fetch research data ─────────────────────────────────────────
     useEffect(() => {
+        if (fetchLock.current) return;
+        fetchLock.current = true;
+
         let isMounted = true;
 
-        const performResearch = async () => {
+        const run = async () => {
             try {
-                const response = await fetch('/api/research', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        topic: stableQuery,
-                        config: config
-                    })
+                const res = await fetch("/api/research", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ topic: stableQuery, config }),
                 });
 
-                if (!response.ok) throw new Error("API pipeline failed to return valid data.");
-                const jsonResponse = await response.json();
-                const apiData = jsonResponse.data;
+                if (!res.ok) throw new Error(`Research API returned ${res.status}`);
 
-                if (isMounted) {
-                    // Map the standardized backend payload directly to the UI state.
-                    // The backend has already formatted keywords and competitors perfectly.
-                    const formattedData: any = {
-                        intent: apiData.intent || "Informational",
-                        keywords: apiData.keywords || [],
-                        competitors: (apiData.competitors || []).map((c: any, i: number) => ({
-                            id: `comp_${i}_${Date.now()}`, // Frontend kendisi benzersiz ID üretiyor
-                            url: c.url || "unknown",
-                            title: c.title || "Untitled",
-                            wordCount: c.wordCount || 0,
-                            selected: true,
-                            headings: c.headings || []
-                        })),
-                        questions: apiData.questions || [],
-                        gaps: apiData.gaps || []
-                    };
-                    setData(formattedData);
+                const json = await res.json();
+                const apiData: ResearchResultData = json.data;
+
+                if (!isMounted) return;
+
+                // Ensure every competitor and keyword has a `selected` flag
+                if (apiData.competitors) {
+                    apiData.competitors = apiData.competitors.map((c: any) => ({
+                        ...c,
+                        selected: c.selected ?? true,
+                    }));
                 }
-            } catch (err) {
-                console.error("[RESEARCH_UI_FAULT]: Data ingestion failed.", err);
-                // Fallback state to prevent hard crashes
-                if (isMounted) {
-                    setData({
-                        intent: "Informational",
-                        keywords: [{ text: "Error fetching keywords", selected: true }],
-                        competitors: [],
-                        questions: [],
-                        gaps: []
-                    } as any);
+                if (apiData.keywords) {
+                    apiData.keywords = apiData.keywords.map((k: any) => ({
+                        ...k,
+                        selected: k.selected ?? true,
+                    }));
                 }
+
+                setData(apiData);
+            } catch (err: any) {
+                if (!isMounted) return;
+                console.error("[RESEARCH_ACCORDION_ERROR]", err);
+                setError(err.message || "Research failed. Please try again.");
+                // Provide a minimal fallback so the pipeline can continue
+                setData({
+                    intent: "Informational",
+                    keywords: [{ text: stableQuery, selected: true }],
+                    competitors: [],
+                    questions: [],
+                    gaps: [],
+                } as any);
             }
         };
 
-        performResearch();
+        run();
         return () => { isMounted = false; };
-    }, [stableQuery]); // FIX: stable primitive instead of object reference
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    // Orchestrate the visual progression timer synced with API data availability
+    // ── PHASE 2: Visual step progression ────────────────────────────────────
+    // Advances one step every STEP_INTERVAL_MS.
+    // Holds at the last step ("Building Outline") until `data` is ready,
+    // then advances through it — resolving the race condition.
     useEffect(() => {
-        if (activeStepIndex >= researchSteps.length) return;
+        if (activeStepIndex >= RESEARCH_STEPS.length) return;
 
-        // Halt the visual progression at the final step if the API payload is still pending
-        if (activeStepIndex === researchSteps.length - 1 && !data) return;
+        const isLastStep = activeStepIndex === RESEARCH_STEPS.length - 1;
+
+        // Don't advance past the last visual step until API data has arrived
+        if (isLastStep && !data) return;
 
         const timer = setTimeout(() => {
-            const currentStepId = researchSteps[activeStepIndex].id;
-            setCompletedSteps(prev => [...prev, currentStepId]);
-            setActiveStepIndex(prev => prev + 1);
-        }, 1500);
+            setCompletedSteps((prev) => [...prev, RESEARCH_STEPS[activeStepIndex].id]);
+            setActiveStepIndex((prev) => prev + 1);
+        }, STEP_INTERVAL_MS);
 
         return () => clearTimeout(timer);
     }, [activeStepIndex, data]);
 
+    // ── PHASE 3: Auto-proceed once all steps complete and data is ready ──────
+    // No manual button click needed — fires onCompleteResearch automatically.
+    useEffect(() => {
+        const allDone = activeStepIndex >= RESEARCH_STEPS.length;
+        if (!allDone || !data || completedFired.current) return;
+
+        completedFired.current = true;
+
+        // Small delay so the user can see the final "completed" state before transitioning
+        const timer = setTimeout(() => {
+            onCompleteResearch(data);
+        }, 600);
+
+        return () => clearTimeout(timer);
+    }, [activeStepIndex, data, onCompleteResearch]);
+
+    // ── Keyword / Competitor toggles ─────────────────────────────────────────
     const toggleKeyword = (index: number) => {
         if (!data) return;
-        const newData = { ...data };
-        newData.keywords[index].selected = !newData.keywords[index].selected;
-        setData(newData);
+        setData((prev) => {
+            if (!prev) return prev;
+            const keywords = [...prev.keywords];
+            keywords[index] = { ...keywords[index], selected: !keywords[index].selected };
+            return { ...prev, keywords };
+        });
     };
 
     const toggleCompetitor = (id: string) => {
         if (!data) return;
-        const newData = { ...data };
-        const compIndex = newData.competitors.findIndex((c: any) => c.id === id);
-        if (compIndex > -1) {
-            newData.competitors[compIndex].selected = !newData.competitors[compIndex].selected;
-            setData(newData);
-        }
+        setData((prev) => {
+            if (!prev) return prev;
+            const competitors = prev.competitors.map((c: any) =>
+                c.id === id ? { ...c, selected: !c.selected } : c
+            );
+            return { ...prev, competitors };
+        });
     };
 
-    const isAllComplete = activeStepIndex >= researchSteps.length && data !== null;
-    const progressPercentage = (completedSteps.length / researchSteps.length) * 100;
+    const isAllComplete = activeStepIndex >= RESEARCH_STEPS.length && data !== null;
+    const progressPercentage = Math.round((completedSteps.length / RESEARCH_STEPS.length) * 100);
 
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="w-full max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-            {/* Header & Progression Indicator */}
+            {/* Header */}
             <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                     <div>
                         <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            {isAllComplete ? <CheckCircle2 className="w-5 h-5 text-green-500" /> : <Search className="w-5 h-5 text-blue-600 animate-pulse" />}
+                            {isAllComplete
+                                ? <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                : <Search className="w-5 h-5 text-blue-600 animate-pulse" />}
                             {isAllComplete ? "Research Complete" : "Researching..."}
                         </h2>
                         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                            Target query: <strong className="text-gray-900 dark:text-white">"{config.query || config.topic}"</strong>
+                            Target query: <strong className="text-gray-900 dark:text-white">"{stableQuery}"</strong>
                         </p>
                     </div>
-                    <div className="text-right">
-                        <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
-                            Step {Math.min(activeStepIndex + 1, researchSteps.length)} of {researchSteps.length}
-                        </span>
-                    </div>
+                    <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                        Step {Math.min(activeStepIndex + 1, RESEARCH_STEPS.length)} of {RESEARCH_STEPS.length}
+                    </span>
                 </div>
 
                 <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2.5 overflow-hidden">
                     <div
                         className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2.5 rounded-full transition-all duration-500 ease-out"
                         style={{ width: `${progressPercentage}%` }}
-                    ></div>
+                    />
                 </div>
+
+                {error && (
+                    <p className="mt-3 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-2">
+                        ⚠️ {error} — continuing with available data.
+                    </p>
+                )}
             </div>
 
-            {/* Interactive Data Dashboard */}
-            <div className="space-y-6">
-                {researchSteps.map((step, index) => {
+            {/* Step cards */}
+            <div className="space-y-4">
+                {RESEARCH_STEPS.map((step, index) => {
                     const isCompleted = completedSteps.includes(step.id);
                     const isActive = index === activeStepIndex;
-
                     if (!isCompleted && !isActive) return null;
+
+                    const Icon = step.icon;
 
                     return (
                         <div
                             key={step.id}
                             className={cn(
                                 "bg-white dark:bg-gray-900 rounded-xl border transition-all overflow-hidden animate-in fade-in slide-in-from-top-2",
-                                isActive ? "border-blue-400 shadow-md ring-1 ring-blue-400" : "border-gray-200 dark:border-gray-800 shadow-sm"
+                                isActive
+                                    ? "border-blue-400 shadow-md ring-1 ring-blue-400"
+                                    : "border-gray-200 dark:border-gray-800 shadow-sm"
                             )}
                         >
-                            {/* Step Header */}
+                            {/* Step header */}
                             <div className="w-full px-6 py-4 flex items-center gap-4 bg-gray-50/50 dark:bg-gray-800/30 border-b border-gray-100 dark:border-gray-800">
-                                {isCompleted ? (
-                                    <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
-                                ) : (
-                                    <Loader2 className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
-                                )}
+                                {isCompleted
+                                    ? <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
+                                    : <Loader2 className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />}
                                 <span className={cn(
                                     "font-bold text-left",
-                                    isCompleted ? "text-gray-900 dark:text-white" : "text-blue-700 dark:text-blue-400"
+                                    isCompleted
+                                        ? "text-gray-900 dark:text-white"
+                                        : "text-blue-600 dark:text-blue-400"
                                 )}>
                                     {step.label}
                                 </span>
                             </div>
 
-                            {/* Payload Rendering */}
+                            {/* Step content — only show for completed steps with data */}
                             {isCompleted && data && (
-                                <div className="p-6">
+                                <div className="px-6 py-4">
+                                    {step.id === "intent" && (
+                                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                                            {data.intent}
+                                        </span>
+                                    )}
 
-                                    {/* Intent Output */}
-                                    {step.id === 'intent' && (
+                                    {step.id === "keywords" && data.keywords?.length > 0 && (
+                                        <div className="flex flex-wrap gap-2">
+                                            {data.keywords.slice(0, 18).map((kw: any, i: number) => (
+                                                <button
+                                                    key={i}
+                                                    onClick={() => toggleKeyword(i)}
+                                                    className={cn(
+                                                        "px-3 py-1.5 rounded-md text-sm font-medium border transition-colors",
+                                                        kw.selected
+                                                            ? "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800"
+                                                            : "bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700"
+                                                    )}
+                                                >
+                                                    {kw.text}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {step.id === "serp" && data.competitors?.length > 0 && (
                                         <div className="space-y-2">
-                                            <p className="text-sm text-gray-500">Detected Search Intent:</p>
-                                            <p className="font-bold text-gray-900 dark:text-white text-lg tracking-wide">{data.intent}</p>
-                                        </div>
-                                    )}
-
-                                    {/* Keyword Output */}
-                                    {step.id === 'keywords' && (
-                                        <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Select the semantic keywords you want the AI to inject:</p>
-                                            <div className="flex flex-wrap gap-2">
-                                                {data.keywords?.map((kw: any, i: number) => (
-                                                    <button
-                                                        key={i}
-                                                        onClick={() => toggleKeyword(i)}
-                                                        className={cn(
-                                                            "px-3 py-1.5 rounded-full text-sm font-medium border transition-colors",
-                                                            kw.selected
-                                                                ? "bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300"
-                                                                : "bg-white border-gray-200 text-gray-500 hover:border-gray-300 dark:bg-gray-900 dark:border-gray-700 dark:hover:border-gray-600"
-                                                        )}
-                                                    >
-                                                        {kw.selected && <CheckCircle2 className="w-3.5 h-3.5 inline mr-1.5 mb-0.5" />}
-                                                        {kw.text}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* SERP Competitor Output */}
-                                    {step.id === 'serp' && (
-                                        <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Uncheck structural targets you want to exclude from the baseline analysis:</p>
-                                            <div className="space-y-2">
-                                                {data.competitors?.map((comp: any) => (
-                                                    <div
-                                                        key={comp.id}
-                                                        onClick={() => toggleCompetitor(comp.id)}
-                                                        className={cn(
-                                                            "flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors",
-                                                            comp.selected
-                                                                ? "bg-white border-green-200 dark:bg-gray-900 dark:border-green-900/30"
-                                                                : "bg-gray-50 border-gray-200 opacity-60 dark:bg-gray-800/50 dark:border-gray-800"
-                                                        )}
-                                                    >
-                                                        <div className="flex items-center gap-3">
-                                                            <div className={cn("w-5 h-5 rounded border flex items-center justify-center transition-colors", comp.selected ? "bg-green-500 border-green-500" : "border-gray-300 dark:border-gray-600")}>
-                                                                {comp.selected && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
-                                                            </div>
-                                                            <div>
-                                                                <p className={cn("text-sm font-medium", comp.selected ? "text-gray-900 dark:text-white" : "text-gray-500 line-through")}>{comp.title}</p>
-                                                                <p className="text-xs text-gray-500">{comp.url}</p>
-                                                            </div>
-                                                        </div>
-                                                        <span className="text-xs font-medium text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
-                                                            ~{comp.wordCount} words
-                                                        </span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Questions Output */}
-                                    {step.id === 'questions' && (
-                                        <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Identified People Also Ask (PAA) constraints:</p>
-                                            <ul className="list-disc pl-5 space-y-1 text-gray-700 dark:text-gray-300 font-medium">
-                                                {data.questions?.map((q: any, i: number) => (
-                                                    <li key={i}>{q.text}</li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-
-                                    {/* Content Gaps Output */}
-                                    {step.id === 'gaps' && (
-                                        <div className="space-y-3">
-                                            <p className="text-sm text-gray-500 mb-3">Identified semantic voids in current SERP topology:</p>
-                                            <div className="flex flex-wrap gap-2">
-                                                {data.gaps?.map((gap: string, i: number) => (
-                                                    <span key={i} className="px-3 py-1.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 text-sm font-medium border border-purple-200 dark:border-purple-800">
-                                                        {gap}
+                                            {data.competitors.slice(0, 5).map((comp: any) => (
+                                                <button
+                                                    key={comp.id}
+                                                    onClick={() => toggleCompetitor(comp.id)}
+                                                    className={cn(
+                                                        "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors",
+                                                        comp.selected
+                                                            ? "bg-indigo-50 border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800"
+                                                            : "bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700"
+                                                    )}
+                                                >
+                                                    <div className={cn(
+                                                        "w-4 h-4 rounded-full border-2 flex-shrink-0 transition-colors",
+                                                        comp.selected
+                                                            ? "bg-indigo-500 border-indigo-500"
+                                                            : "border-gray-300 dark:border-gray-600"
+                                                    )} />
+                                                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                                        {comp.title}
                                                     </span>
-                                                ))}
-                                            </div>
+                                                    <span className="ml-auto text-xs text-gray-400 flex-shrink-0">
+                                                        {comp.wordCount?.toLocaleString()} words
+                                                    </span>
+                                                </button>
+                                            ))}
                                         </div>
                                     )}
 
-                                    {/* Final Step Fallback */}
-                                    {step.id === 'outline' && (
-                                        <p className="text-sm text-gray-500 italic">Data successfully consolidated for structural outlining.</p>
+                                    {step.id === "questions" && data.questions?.length > 0 && (
+                                        <ul className="list-disc list-inside space-y-1 text-sm text-gray-600 dark:text-gray-300">
+                                            {data.questions.slice(0, 8).map((q: any, i: number) => (
+                                                <li key={i}>{q.text}</li>
+                                            ))}
+                                        </ul>
                                     )}
 
+                                    {step.id === "gaps" && data.gaps?.length > 0 && (
+                                        <div className="flex flex-wrap gap-2">
+                                            {data.gaps.map((gap: string, i: number) => (
+                                                <span
+                                                    key={i}
+                                                    className="px-3 py-1.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 text-sm font-medium border border-purple-200 dark:border-purple-800"
+                                                >
+                                                    {gap}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {step.id === "outline" && (
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 italic flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                            Data consolidated — transitioning to Outline Architect...
+                                        </p>
+                                    )}
                                 </div>
                             )}
                         </div>
                     );
                 })}
             </div>
-
-            {/* Terminal Action Button */}
-            {isAllComplete && data && (
-                <div className="flex justify-end pt-4 animate-in fade-in zoom-in duration-500">
-                    <button
-                        onClick={() => onCompleteResearch(data)}
-                        className="inline-flex items-center justify-center px-8 py-3.5 text-base font-bold text-white transition-all bg-green-600 hover:bg-green-700 rounded-xl shadow-md hover:scale-[1.02]"
-                    >
-                        Review Outline Matrix
-                        <ChevronDown className="w-5 h-5 ml-2 -rotate-90" />
-                    </button>
-                </div>
-            )}
         </div>
     );
 }
