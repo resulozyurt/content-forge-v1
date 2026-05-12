@@ -236,9 +236,9 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </span>
                                     )}
 
-                                    {step.id === "keywords" && data.keywords?.length > 0 && (
+                                    {step.id === "keywords" && (data.keywords?.length ?? 0) > 0 && (
                                         <div className="flex flex-wrap gap-2">
-                                            {data.keywords.slice(0, 18).map((kw: any, i: number) => (
+                                            {(data.keywords ?? []).slice(0, 18).map((kw: any, i: number) => (
                                                 <button
                                                     key={i}
                                                     onClick={() => toggleKeyword(i)}
@@ -255,9 +255,9 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {step.id === "serp" && data.competitors?.length > 0 && (
+                                    {step.id === "serp" && (data.competitors?.length ?? 0) > 0 && (
                                         <div className="space-y-2">
-                                            {data.competitors.slice(0, 5).map((comp: any) => (
+                                            {(data.competitors ?? []).slice(0, 5).map((comp: any) => (
                                                 <button
                                                     key={comp.id}
                                                     onClick={() => toggleCompetitor(comp.id)}
@@ -285,9 +285,9 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                         </div>
                                     )}
 
-                                    {step.id === "questions" && data.questions?.length > 0 && (
+                                    {step.id === "questions" && (data.questions?.length ?? 0) > 0 && (
                                         <ul className="list-disc list-inside space-y-1 text-sm text-gray-600 dark:text-gray-300">
-                                            {data.questions.slice(0, 8).map((q: any, i: number) => (
+                                            {(data.questions ?? []).slice(0, 8).map((q: any, i: number) => (
                                                 <li key={i}>{q.text}</li>
                                             ))}
                                         </ul>
@@ -295,7 +295,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
 
                                     {step.id === "gaps" && (data.gaps?.length ?? 0) > 0 && (
                                         <div className="flex flex-wrap gap-2">
-                                            {data.gaps.map((gap: string, i: number) => (
+                                            {(data.gaps ?? []).map((gap: string, i: number) => (
                                                 <span
                                                     key={i}
                                                     className="px-3 py-1.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 text-sm font-medium border border-purple-200 dark:border-purple-800"
