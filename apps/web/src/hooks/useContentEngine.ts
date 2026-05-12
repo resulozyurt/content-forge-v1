@@ -18,7 +18,6 @@ interface GenerationParams {
 export function useContentEngine() {
   const [status, setStatus] = useState<EngineStatus>("IDLE");
   const [currentSectionName, setCurrentSectionName] = useState<string>("");
-  // generatedContent artık ham string değil, onaylı HTML chunk'larının dizisi
   const [generatedContent, setGeneratedContent] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -28,54 +27,72 @@ export function useContentEngine() {
       setGeneratedContent("");
       setErrorMessage(null);
 
-      // ── PHASE 1: RESEARCH AGENT ──────────────────────────────────────────
-      const researchResponse = await fetch("/api/v2/generator/research", {
+      // ── PHASE 1: RESEARCH ─────────────────────────────────────────────────
+      const researchRes = await fetch("/api/v2/generator/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keyword, targetLanguage }),
       });
-      if (!researchResponse.ok) {
-        const errData = await researchResponse.json().catch(() => ({}));
-        throw new Error(`Research Failed: ${errData.error || researchResponse.statusText}`);
+      if (!researchRes.ok) {
+        const err = await researchRes.json().catch(() => ({}));
+        throw new Error(`Research failed: ${err.error || researchRes.statusText}`);
       }
-      const researchBlueprint = await researchResponse.json();
+      const researchBlueprint = await researchRes.json();
 
-      // ── PHASE 2: PLANNER AGENT ───────────────────────────────────────────
+      // ── PHASE 2: OUTLINE ──────────────────────────────────────────────────
       setStatus("PLANNING");
-      const outlineResponse = await fetch("/api/v2/generator/outline", {
+      const outlineRes = await fetch("/api/v2/generator/outline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ researchBlueprint }),
       });
-      if (!outlineResponse.ok) {
-        const errData = await outlineResponse.json().catch(() => ({}));
-        throw new Error(`Planning Phase Failed: ${errData.error || outlineResponse.statusText}`);
+      if (!outlineRes.ok) {
+        const err = await outlineRes.json().catch(() => ({}));
+        throw new Error(`Planning failed: ${err.error || outlineRes.statusText}`);
       }
-      const { outline } = await outlineResponse.json();
+      const { outline } = await outlineRes.json();
 
-      // Makale başlığını HTML olarak ekle — artık ## Markdown değil
-      setGeneratedContent(
-        `<h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-8 pb-4 border-b border-gray-200 dark:border-gray-700">${outline.title}</h1>\n\n`
-      );
+      if (!outline?.sections?.length) {
+        throw new Error("Outline returned no sections.");
+      }
 
-      // ── PHASE 3 & 4: WRITER + EDITOR LOOP ───────────────────────────────
-      for (const section of outline.sections) {
+      // Pre-compute all section titles — used by writer to generate lead summary
+      const allSectionTitles: string[] = outline.sections.map((s: any) => s.title);
+
+      // H1 title block — lead summary injected BEFORE this by the writer for section 0
+      const h1Block = `<h1 style="font-size:2.2em;font-weight:800;line-height:1.3;margin:0 0 32px;color:#0f172a;">${outline.title}</h1>\n\n`;
+      setGeneratedContent(h1Block);
+
+      // ── PHASE 3+4: WRITE + QA EACH SECTION ───────────────────────────────
+      for (let i = 0; i < outline.sections.length; i++) {
+        const section = outline.sections[i];
         setStatus("WRITING_SECTION");
         setCurrentSectionName(section.title);
 
-        const writerResponse = await fetch("/api/v2/generator/writer", {
+        const writerRes = await fetch("/api/v2/generator/writer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ researchBlueprint, sectionPlan: section }),
+          body: JSON.stringify({
+            researchBlueprint: {
+              ...researchBlueprint,
+              articleTitle: outline.title,
+            },
+            sectionPlan: section,
+            // Pass index so writer knows when to prepend lead summary (index 0 only)
+            sectionIndex: i,
+            allSectionTitles,
+          }),
         });
-        if (!writerResponse.ok) {
-          throw new Error(`Writing Failed for section: ${section.title}`);
+
+        if (!writerRes.ok) {
+          console.warn(`Writing failed for section ${i}: "${section.title}" — skipping`);
+          continue;
         }
-        const { chunk: draftChunk } = await writerResponse.json();
+        const { chunk: draftChunk } = await writerRes.json();
 
         setStatus("QA_CHECK");
 
-        const editorResponse = await fetch("/api/v2/generator/editor", {
+        const editorRes = await fetch("/api/v2/generator/editor", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -84,29 +101,23 @@ export function useContentEngine() {
             sectionPlan: section,
           }),
         });
-        if (!editorResponse.ok) {
-          throw new Error(`QA Check Failed for section: ${section.title}`);
-        }
-        const { chunk: finalApprovedChunk } = await editorResponse.json();
 
-        // Onaylı HTML chunk'ı direkt state'e ekle — HİÇBİR dönüşüm yapma
-        setGeneratedContent((prev) => prev + finalApprovedChunk + "\n\n");
+        // On QA failure, fall back to draft rather than crashing the pipeline
+        const { chunk: finalChunk } = editorRes.ok
+          ? await editorRes.json()
+          : { chunk: draftChunk };
+
+        setGeneratedContent((prev) => prev + finalChunk + "\n\n");
       }
 
       setStatus("COMPLETED");
       setCurrentSectionName("");
     } catch (error: any) {
-      console.error("[CONTENT_ENGINE_CRASH]", error);
+      console.error("[CONTENT_ENGINE_ERROR]", error);
       setStatus("ERROR");
       setErrorMessage(error.message || "An unexpected error occurred during generation.");
     }
   };
 
-  return {
-    status,
-    currentSectionName,
-    generatedContent,
-    errorMessage,
-    startGeneration,
-  };
+  return { status, currentSectionName, generatedContent, errorMessage, startGeneration };
 }

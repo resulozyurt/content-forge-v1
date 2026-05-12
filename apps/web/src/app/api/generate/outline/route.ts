@@ -4,113 +4,148 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 
-const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY || "",
-});
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
 export const maxDuration = 60;
 
+// ---------------------------------------------------------------------------
+// Rotate approach angles so every re-generation is genuinely different
+// ---------------------------------------------------------------------------
+const OUTLINE_ANGLES = [
+  "practical-how-to guide with step-by-step depth",
+  "data-driven analysis with benchmark comparisons",
+  "problem-solution framing with real-world case context",
+  "beginner-to-expert progression with increasing complexity",
+  "myth-busting and contrarian insights format",
+];
+
 export async function POST(req: Request) {
-    try {
-        const session = await getServerSession(authOptions);
-        if (!session?.user?.id) {
-            return NextResponse.json({ error: "Unauthorized access." }, { status: 401 });
-        }
-
-        // === FIX: brandName ve brandDesc alındı ===
-        const { researchData, topic, language, config, brandName, brandDesc } = await req.json();
-
-        if (!researchData || !topic) {
-            return NextResponse.json({ error: "Invalid payload: Missing research data or topic." }, { status: 400 });
-        }
-
-        const competitorHeadings = researchData.competitors?.map((c: any) => c.headings.map((h: any) => h.text).join(" | ")).join("\n");
-        const paaQuestions = researchData.questions?.map((q: any) => q.text).join(", ");
-
-        const targetWords = parseInt(config?.targetLength || "1000", 10);
-        const maxH2Count = Math.max(4, Math.floor(targetWords / 250));
-        const minH2Count = Math.max(3, maxH2Count - 2);
-
-        // === FIX: MARKA ADINI BAŞLIKLARA YEDİRME (INCEPTION) ===
-        let brandInstruction = "";
-        if (brandName && brandName.trim() !== "") {
-            brandInstruction = `\n7. BRAND INCEPTION: Subtly weave the brand name "${brandName}" into EXACTLY ONE of the H2 or H3 headings. Make it sound highly natural and educational, not promotional (e.g., "How ${brandName} Solves [Problem]").`;
-        }
-
-        // === FIX: KIYASLAMA İÇERİKLERİNDE KENDİ MARKAYÜ ÜSTE EKLE ===
-        // Konuya göre listicle / karşılaştırma içeriği olduğunu tespit edince
-        // kendi markayı rakipler listesinde EN ÜSTE koy.
-        let ownBrandInstruction = "";
-        const isComparisonTopic = /\b(vs|versus|comparison|alternative|best|top|review|karşılaştırma|alternatif|en iyi|inceleme)\b/i.test(topic);
-        if (brandName && brandName.trim() !== "" && isComparisonTopic) {
-            const brandDescText = brandDesc && brandDesc.trim() !== "" ? brandDesc : "The leading solution in this category";
-            ownBrandInstruction = `\n8. OWN BRAND FIRST: Since this is a comparison/listicle article, you MUST include "${brandName}" as the FIRST H3 item in the main listicle H2 section. Position it as the top recommended option. Label it something like "${brandName} — ${brandDescText.substring(0, 50)}". Do NOT skip or omit it.`;
-        }
-
-        const systemPrompt = `You are a Senior Silicon Valley SEO Content Architect. Your mission is to engineer a highly optimized, intent-driven article outline for the topic: "${topic}".
-
-[CRITICAL DYNAMIC OUTLINE RULES - DO NOT IGNORE]:
-1. TARGET LANGUAGE: Strictly ${language}. ALL generated headings MUST be translated and written natively in ${language}.
-2. MATHEMATICAL PACING: The requested article length is ~${targetWords} words. Generate EXACTLY between ${minH2Count} and ${maxH2Count} main H2 sections.
-3. ZERO FLUFF (CONCISENESS): Headings must be punchy, highly readable, and STRICTLY UNDER 8 WORDS.
-4. SGE & FEATURED SNIPPET OPTIMIZATION: Formulate at least 30% of your non-list H2s as exact-match questions based on PAA queries.
-5. INTENT ADAPTATION:
-   - If Listicle (e.g., "Top 10 Tools"): Create ONE main H2 and nest the products as H3s.
-   - If Explanatory Guide: Use H3s sparingly, only to break down highly complex H2 steps.
-6. LOGICAL FLOW: Introduction -> Core Definition -> Main Problem/Solution -> Actionable Steps -> Conclusion & FAQ.${brandInstruction}${ownBrandInstruction}`;
-
-        const anthropicResponse = await anthropic.messages.create({
-            model: "claude-sonnet-4-6", 
-            max_tokens: 2048,
-            temperature: 0.3, 
-            system: systemPrompt,
-            messages: [
-                {
-                    role: "user",
-                    content: `Competitor Heading Structures:\n${competitorHeadings}\n\nPeople Also Ask (PAA) Queries:\n${paaQuestions}\n\nGenerate the intelligent, intent-aware SEO outline in ${language}.`
-                }
-            ],
-            tools: [
-                {
-                    name: "generate_seo_outline",
-                    description: "Outputs the structured H2/H3 outline array. ALL headings must be concise and under 8 words.",
-                    input_schema: {
-                        type: "object",
-                        properties: {
-                            headings: {
-                                type: "array",
-                                items: {
-                                    type: "object",
-                                    properties: {
-                                        level: { 
-                                            type: "string", 
-                                            enum: ["h2", "h3"] 
-                                        },
-                                        text: { 
-                                            type: "string", 
-                                            description: "The optimized, punchy heading text. Maximum 8 words." 
-                                        }
-                                    },
-                                    required: ["level", "text"]
-                                }
-                            }
-                        },
-                        required: ["headings"]
-                    }
-                }
-            ],
-            tool_choice: { type: "tool", name: "generate_seo_outline" }
-        });
-
-        const toolUseBlock = anthropicResponse.content.find((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use');
-        if (!toolUseBlock) throw new Error("The AI failed to generate a structured outline tool call.");
-
-        const parsedData = typeof toolUseBlock.input === 'string' ? JSON.parse(toolUseBlock.input) : toolUseBlock.input;
-
-        return NextResponse.json({ outline: parsedData.headings }, { status: 200 });
-
-    } catch (error: any) {
-        console.error("[OUTLINE_GENERATION_FAULT]:", error);
-        return NextResponse.json({ error: error.message || "Internal server error during outline generation." }, { status: 500 });
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized access." }, { status: 401 });
     }
+
+    const { researchData, topic, language, config, brandName, brandDesc, previousHeadings } =
+      await req.json();
+
+    if (!researchData || !topic) {
+      return NextResponse.json({ error: "Missing research data or topic." }, { status: 400 });
+    }
+
+    // ── Dynamic angle rotation ─────────────────────────────────────────────
+    const angleIndex = Math.floor(Math.random() * OUTLINE_ANGLES.length);
+    const selectedAngle = OUTLINE_ANGLES[angleIndex];
+
+    // ── Previous headings — force model to avoid them ──────────────────────
+    const avoidBlock =
+      previousHeadings && previousHeadings.length > 0
+        ? `\n\nPREVIOUSLY GENERATED HEADINGS — DO NOT REUSE ANY OF THESE:\n${previousHeadings
+            .map((h: string) => `- ${h}`)
+            .join("\n")}\nEvery single heading in your new output must differ conceptually from the list above.`
+        : "";
+
+    const competitorHeadings =
+      researchData.competitors
+        ?.map((c: any) => c.headings?.map((h: any) => h.text).join(" | "))
+        .join("\n") || "";
+    const paaQuestions =
+      researchData.questions?.map((q: any) => q.text).join(", ") || "";
+
+    const targetWords = parseInt(config?.targetLength || "1500", 10);
+    // Rich depth: more H2s and always add H3s
+    const maxH2Count = Math.max(5, Math.floor(targetWords / 220));
+    const minH2Count = Math.max(4, maxH2Count - 2);
+
+    // ── Brand instructions ─────────────────────────────────────────────────
+    let brandInstruction = "";
+    if (brandName?.trim()) {
+      brandInstruction = `\n7. BRAND INTEGRATION: Weave "${brandName}" naturally into exactly ONE H2 or H3. Educational tone — not promotional.`;
+    }
+    let ownBrandInstruction = "";
+    const isComparison =
+      /\b(vs|versus|comparison|alternative|best|top|review|karşılaştırma|alternatif|en iyi|inceleme)\b/i.test(
+        topic
+      );
+    if (brandName?.trim() && isComparison) {
+      const desc = brandDesc?.trim() || "The leading solution in this category";
+      ownBrandInstruction = `\n8. OWN BRAND FIRST: In the main listicle H2, place "${brandName}" as the FIRST H3 — labeled "${brandName} — ${desc.substring(0, 50)}".`;
+    }
+
+    // ── System prompt ──────────────────────────────────────────────────────
+    const systemPrompt = `You are a Senior SEO Content Architect. Engineer a comprehensive, deeply structured article outline for: "${topic}".
+CONTENT APPROACH THIS RUN: ${selectedAngle}
+TARGET LANGUAGE: ${language}
+${avoidBlock}
+
+[STRUCTURAL RULES]:
+1. LANGUAGE: All headings strictly in ${language}. Native phrasing — no translation feel.
+2. VOLUME: Generate EXACTLY ${minH2Count}–${maxH2Count} H2 sections.
+3. DEPTH — MANDATORY H3s: Every H2 must have 2–4 H3 sub-headings. Explanatory guides also get H3s.
+   - For high-complexity H2s (processes, comparisons): also add H4s inside relevant H3s.
+4. ZERO FLUFF: Headings must be specific, punchy, under 9 words.
+5. FEATURED SNIPPET TARGETING: At least 30% of H2s phrased as PAA questions.
+6. LOGICAL ARC: Introduction Hook → Core Concepts → Data & Benchmarks → Actionable Steps → Advanced Strategies → Conclusion + FAQ.
+7. UNIQUENESS: No two headings can share the same core meaning or keyword angle.
+8. H3 SPECIFICITY: H3s must go deeper than the H2 — each covering a distinct sub-angle, not a restatement.${brandInstruction}${ownBrandInstruction}`;
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 3000,
+      // Higher temperature ensures variety on re-generation
+      temperature: 0.85,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: `Competitor heading structures:\n${competitorHeadings}\n\nPAA queries:\n${paaQuestions}\n\nGenerate the ${selectedAngle} outline for "${topic}" in ${language}. Remember: approach = "${selectedAngle}".`,
+        },
+      ],
+      tools: [
+        {
+          name: "generate_seo_outline",
+          description: "Outputs the full H2/H3/H4 outline array.",
+          input_schema: {
+            type: "object",
+            properties: {
+              headings: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    level: { type: "string", enum: ["h2", "h3", "h4"] },
+                    text: {
+                      type: "string",
+                      description: "Punchy heading. Max 9 words.",
+                    },
+                  },
+                  required: ["level", "text"],
+                },
+              },
+            },
+            required: ["headings"],
+          },
+        },
+      ],
+      tool_choice: { type: "tool", name: "generate_seo_outline" },
+    });
+
+    const toolUseBlock = response.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    );
+    if (!toolUseBlock) throw new Error("Model failed to return a structured outline.");
+
+    const parsed =
+      typeof toolUseBlock.input === "string"
+        ? JSON.parse(toolUseBlock.input)
+        : toolUseBlock.input;
+
+    return NextResponse.json({ outline: parsed.headings }, { status: 200 });
+  } catch (error: any) {
+    console.error("[OUTLINE_GENERATION_FAULT]:", error);
+    return NextResponse.json(
+      { error: error.message || "Internal server error during outline generation." },
+      { status: 500 }
+    );
+  }
 }
