@@ -10,9 +10,13 @@ import { useContentEngine } from "@/hooks/useContentEngine";
 
 interface LiveGenerationProps {
     outlineData: FinalOutlineData & { config?: any };
-    onComplete: (blocks: GeneratedBlock[], seoMeta?: { focusKeyword: string; metaTitle: string; metaDescription: string }) => void;
+    onComplete: (
+        blocks: GeneratedBlock[],
+        seoMeta?: { focusKeyword: string; metaTitle: string; metaDescription: string }
+    ) => void;
 }
 
+// Allow all semantic HTML tags so inline styles, tables, figures survive DOMPurify
 const DOMPURIFY_CONFIG = {
     ALLOWED_TAGS: [
         "h1", "h2", "h3", "h4", "h5", "h6",
@@ -37,57 +41,63 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         useContentEngine();
 
     const scrollRef = useRef<HTMLDivElement>(null);
+    // Prevent double-mount invocation in React Strict Mode
     const executionLock = useRef(false);
 
+    // Auto-scroll as content streams in
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [generatedContent]);
 
-    // Start pipeline once on mount
+    // Kick off generation exactly once, passing the user's Outline Architect headings directly
     useEffect(() => {
         if (executionLock.current) return;
         executionLock.current = true;
 
+        // Primary keyword: first selected keyword, then first heading text, then generic fallback
         const keyword =
             outlineData.selectedKeywords?.[0] ||
             outlineData.headings?.[0]?.text ||
             "Target Keyword";
 
-        // All selected keywords — used for density optimization + SEO score
         const selectedKeywords = outlineData.selectedKeywords || [];
 
-        // All heading texts for context
-        const allHeadings = outlineData.headings?.map((h) => h.text) || [];
-
         let targetLanguage: "en-US" | "tr-TR" | "es-ES" = "en-US";
-        const configLang = outlineData.config?.language?.toLowerCase() || "";
-        if (configLang.includes("türk") || configLang === "tr") targetLanguage = "tr-TR";
-        if (configLang.includes("spanish") || configLang === "es") targetLanguage = "es-ES";
+        const configLang = (outlineData.config?.language || "").toLowerCase();
+        if (configLang === "tr" || configLang.includes("türk")) targetLanguage = "tr-TR";
+        if (configLang === "es" || configLang.includes("spanish")) targetLanguage = "es-ES";
 
-        startGeneration({ keyword, targetLanguage, selectedKeywords, allHeadings });
+        // Pass the user's exact headings — engine will write content for each one
+        startGeneration({
+            keyword,
+            targetLanguage,
+            userHeadings: outlineData.headings || [],
+            selectedKeywords,
+        });
 
         return () => { executionLock.current = false; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Fire onComplete when generation finishes — pass seoMetadata alongside blocks
+    // Notify parent when pipeline finishes, including the generated SEO metadata
     useEffect(() => {
-        if (status === "COMPLETED" && generatedContent) {
-            const blocks: GeneratedBlock[] = [
-                { id: "v2-full-content", type: "html" as any, content: generatedContent },
-            ];
-            // Append SEO metadata as a block so ProseEditor picks it up
-            if (seoMetadata) {
-                blocks.push({
-                    id: "v2-seo-metadata",
-                    type: "seo_metadata",
-                    content: JSON.stringify(seoMetadata),
-                });
-            }
-            onComplete(blocks, seoMetadata || undefined);
+        if (status !== "COMPLETED" || !generatedContent) return;
+
+        const blocks: GeneratedBlock[] = [
+            { id: "v2-full-content", type: "html" as any, content: generatedContent },
+        ];
+
+        if (seoMetadata) {
+            blocks.push({
+                id: "v2-seo-metadata",
+                type: "seo_metadata",
+                content: JSON.stringify(seoMetadata),
+            });
         }
+
+        onComplete(blocks, seoMetadata || undefined);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status]);
 
@@ -95,47 +105,47 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
     const progress = useMemo(() => {
         if (errorMessage) return 100;
-        switch (status) {
-            case "IDLE": return 0;
-            case "RESEARCHING": return 15;
-            case "PLANNING": return 35;
-            case "WRITING_SECTION": return 60;
-            case "QA_CHECK": return 80;
-            case "GENERATING_SEO": return 93;
-            case "COMPLETED": return 100;
-            default: return 50;
-        }
+        const map: Record<string, number> = {
+            IDLE: 0,
+            RESEARCHING: 15,
+            WRITING_SECTION: 55,
+            QA_CHECK: 78,
+            GENERATING_SEO: 93,
+            COMPLETED: 100,
+        };
+        return map[status] ?? 50;
     }, [status, errorMessage]);
 
-    const currentTaskText = useMemo(() => {
+    const taskText = useMemo(() => {
         if (errorMessage) return "Process halted.";
         switch (status) {
             case "IDLE": return "Initializing AI Engine...";
-            case "RESEARCHING": return "🔍 Analyzing SERP data & brand guidelines...";
-            case "PLANNING": return "📐 Architecting section blueprints...";
-            case "WRITING_SECTION": return `✍️ Drafting: ${currentSectionName || "..."}`;
-            case "QA_CHECK": return `🛡️ QA check: ${currentSectionName || "..."}`;
-            case "GENERATING_SEO": return "🎯 Generating Rank Math SEO metadata...";
-            case "COMPLETED": return "✅ Generation Complete!";
+            case "RESEARCHING": return "🔍 Loading brand context and sitemap links...";
+            case "WRITING_SECTION": return `✍️  Writing: ${currentSectionName || "..."}`;
+            case "QA_CHECK": return `🛡️  QA review: ${currentSectionName || "..."}`;
+            case "GENERATING_SEO": return "🎯  Generating Rank Math SEO metadata...";
+            case "COMPLETED": return "✅  All sections generated successfully.";
             default: return "Processing...";
         }
     }, [status, currentSectionName, errorMessage]);
 
-    const sanitizedHtml = useMemo(() => {
-        if (!generatedContent) return "";
-        return DOMPurify.sanitize(generatedContent, DOMPURIFY_CONFIG);
-    }, [generatedContent]);
+    const sanitizedHtml = useMemo(
+        () => (generatedContent ? DOMPurify.sanitize(generatedContent, DOMPURIFY_CONFIG) : ""),
+        [generatedContent]
+    );
 
     return (
         <div className="w-full max-w-5xl mx-auto space-y-6 animate-in fade-in zoom-in-95 duration-500">
-            {/* Header */}
+            {/* Status header */}
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                         <div className={cn(
                             "p-2 rounded-lg",
-                            isFinished ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400"
-                                : errorMessage ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
+                            isFinished
+                                ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400"
+                                : errorMessage
+                                    ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
                                     : "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse"
                         )}>
                             {isFinished ? <CheckCircle2 size={24} /> : <Code2 size={24} />}
@@ -148,16 +158,18 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                             </h2>
                             <p className={cn(
                                 "text-sm font-medium mt-0.5",
-                                errorMessage ? "text-red-500" : isFinished ? "text-green-600 dark:text-green-400" : "text-blue-600 dark:text-blue-400"
+                                errorMessage ? "text-red-500"
+                                    : isFinished ? "text-green-600 dark:text-green-400"
+                                        : "text-blue-600 dark:text-blue-400"
                             )}>
-                                {currentTaskText}
+                                {taskText}
                             </p>
                         </div>
                     </div>
                     {isFinished && seoMetadata && (
-                        <div className="text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-lg font-medium">
+                        <span className="text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-lg font-medium">
                             ✓ SEO Metadata Ready
-                        </div>
+                        </span>
                     )}
                 </div>
 
@@ -182,9 +194,9 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                     <div
                         className={cn(
                             "prose prose-lg dark:prose-invert max-w-none",
-                            "prose-h1:text-3xl prose-h1:font-extrabold prose-h1:text-gray-900",
-                            "prose-h2:text-2xl prose-h2:font-bold prose-h2:text-gray-900 prose-h2:mt-10 prose-h2:mb-4",
-                            "prose-h3:text-xl prose-h3:font-semibold prose-h3:text-gray-800 prose-h3:mt-6 prose-h3:mb-3",
+                            "prose-h1:text-3xl prose-h1:font-extrabold",
+                            "prose-h2:text-2xl prose-h2:font-bold prose-h2:mt-10 prose-h2:mb-4",
+                            "prose-h3:text-xl prose-h3:font-semibold prose-h3:mt-6 prose-h3:mb-3",
                             "prose-p:text-gray-600 prose-p:dark:text-gray-300 prose-p:leading-relaxed prose-p:my-3",
                             "prose-ul:my-4 prose-li:my-1",
                             "prose-table:w-full prose-table:border-collapse prose-th:border prose-th:px-4 prose-th:py-2 prose-th:bg-gray-100 prose-th:dark:bg-gray-800 prose-td:border prose-td:px-4 prose-td:py-2",
@@ -195,7 +207,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
                         )}
                         dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
                     />
-                    {status === "WRITING_SECTION" && (
+                    {(status === "WRITING_SECTION" || status === "QA_CHECK") && (
                         <div className="w-3 h-6 bg-blue-500 animate-pulse mt-4 rounded" />
                     )}
                 </div>
