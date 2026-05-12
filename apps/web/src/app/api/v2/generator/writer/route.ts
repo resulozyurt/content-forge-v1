@@ -46,7 +46,7 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
         }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(60000),
       });
 
       if (!res.ok) {
@@ -291,21 +291,27 @@ export async function POST(req: NextRequest) {
       // Sort by score DESC, then by URL length ASC (shorter = more specific page)
       scoredLinks.sort((a, b) => b.score - a.score || a.url.length - b.url.length);
 
-      // Pick the entry at position `internalLinkSlot` in the ranked list.
-      // This guarantees each section gets a DIFFERENT URL:
-      //   section 0 (slot 0) → rank #0 best match
-      //   section 2 (slot 1) → rank #1 best match
-      //   section 4 (slot 2) → rank #2 best match
-      // If we run out of ranked links, wrap with offset to avoid exact repeats.
-      const pickIndex = internalLinkSlot % scoredLinks.length;
+      // Pick strategy: use sectionIndex as a hard offset into the scored list.
+      // This guarantees each section gets a DIFFERENT URL regardless of scores:
+      //   sectionIndex 0 → scoredLinks[0]  (best semantic match for section 0)
+      //   sectionIndex 2 → scoredLinks[1]  (second-best for section 2)
+      //   sectionIndex 4 → scoredLinks[2]  (third-best for section 4)
+      // Wraps with a prime-number offset (7) to spread across the full list
+      // and avoid cycling back to the same URLs when the list is short.
+      const pickIndex = (internalLinkSlot * 7) % scoredLinks.length;
       const picked = scoredLinks[pickIndex];
       const link = picked.url;
 
       console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} → ${link}`);
 
-      linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a natural anchor in a sentence:
-<a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word topically relevant anchor text]</a>
-RULES: Anchor text must describe the destination page content. NEVER use "click here", the brand name, or the raw URL as anchor text.
+      linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a short inline anchor inside a sentence:
+<a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word anchor text]</a>
+CRITICAL RULES:
+- The <a> tag must wrap ONLY 3–5 words of anchor text — NEVER wrap an entire sentence, paragraph, or <li> element.
+- Correct: "...which is why <a href="...">retail execution tools</a> matter..."
+- WRONG:  <a href="..."><li>Entire bullet point text here...</li></a>
+- WRONG:  <a href="...">The entire sentence wrapped as a link.</a>
+- Anchor text must be a natural noun phrase describing the destination page topic.
 
 `;
     }
