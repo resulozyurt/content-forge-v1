@@ -8,18 +8,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" })
 
 // ---------------------------------------------------------------------------
 // Gemini image generation
-//
-// Correct model: gemini-3.1-flash-image-preview  (Nano Banana 2)
-// Endpoint:      v1beta / generateContent
-// Body key:      generationConfig.responseModalities (NOT config.*)
-//
-// Previously tried models and why they 404'd:
-//   imagen-3.0-generate-002           → uses /predict endpoint, restricted tier
-//   gemini-2.0-flash-preview-image-*  → never existed in v1beta
-//   gemini-2.0-flash-exp-image-*      → experimental alias, removed
-//
-// Source: https://ai.google.dev/gemini-api/docs/image-generation
-// Only GEMINI_API_KEY is required.
+// Correct model: gemini-3.1-flash-image-preview (Nano Banana 2)
+// Endpoint: v1beta/generateContent
+// Timeout: 60s — model needs ~35-50s to generate
 // ---------------------------------------------------------------------------
 async function generateImageWithGemini(prompt: string): Promise<string | null> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -28,7 +19,6 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
     return null;
   }
 
-  // Model fallback chain — try each until one succeeds
   const models = [
     "gemini-3.1-flash-image-preview",
     "gemini-2.0-flash-exp-image-generation",
@@ -37,7 +27,6 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
 
   for (const model of models) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -50,36 +39,31 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
       });
 
       if (!res.ok) {
-        const errText = await res.text();
-        console.warn(`[GEMINI_IMAGE] model=${model} status=${res.status}:`, errText.slice(0, 150));
-        continue; // Try next model
+        console.warn(`[GEMINI_IMAGE] model=${model} status=${res.status}:`, (await res.text()).slice(0, 150));
+        continue;
       }
 
       const data = await res.json();
       const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
       const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
-
       if (!imgPart?.inlineData?.data) {
-        console.warn(`[GEMINI_IMAGE] model=${model} — no inlineData in response`);
-        continue; // Try next model
+        console.warn(`[GEMINI_IMAGE] model=${model} — no inlineData`);
+        continue;
       }
 
       console.log(`[GEMINI_IMAGE] Success with model=${model}`);
       return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
     } catch (err: any) {
-      console.warn(`[GEMINI_IMAGE] model=${model} fetch error:`, err.message);
-      continue; // Try next model
+      console.warn(`[GEMINI_IMAGE] model=${model} error:`, err.message);
     }
   }
 
-  console.warn("[GEMINI_IMAGE] All models failed — returning null");
+  console.warn("[GEMINI_IMAGE] All models failed");
   return null;
 }
 
 // ---------------------------------------------------------------------------
-// Live citation lookup — searches Serper for the section topic so every
-// citation links to a real, on-topic article rather than a domain homepage.
-// Falls back to a static pool if Serper is unavailable.
+// Live citation lookup via Serper — returns real article URLs, not homepages
 // ---------------------------------------------------------------------------
 interface Citation { url: string; label: string }
 
@@ -109,44 +93,39 @@ async function fetchLiveCitation(keyword: string, sectionTitle: string, fallback
   if (!serperKey) return STATIC_FALLBACKS[fallbackIndex % STATIC_FALLBACKS.length];
 
   try {
-    const query = `${sectionTitle} ${keyword} statistics data research`;
     const res = await fetch("https://google.serper.dev/search", {
       method: "POST",
       headers: { "X-API-KEY": serperKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ q: query, num: 10 }),
+      body: JSON.stringify({ q: `${sectionTitle} ${keyword} statistics data research`, num: 10 }),
       signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) throw new Error(`Serper ${res.status}`);
     const results: any[] = (await res.json()).organic || [];
 
-    // Two-pass: first try preferred authority domains, then fall back to any clean result
     const cleanResults = results.filter(
       (r) => r.link && !BLOCKED_DOMAINS.some((d) => (r.link as string).toLowerCase().includes(d))
     );
-
     const preferred = cleanResults.find((r) =>
       PREFERRED_DOMAINS.some((d) => (r.link as string).toLowerCase().includes(d))
     );
     const candidate = preferred ?? cleanResults[0];
 
     if (candidate?.link) {
-      try {
-        const domain = new URL(candidate.link).hostname.replace(/^www\./, "");
-        const label = domain.split(".").slice(0, -1).join(" ")
-          .replace(/-/g, " ").split(" ")
-          .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || domain;
-        console.log(`[CITATION_LIVE] "${sectionTitle}" → ${candidate.link}`);
-        return { url: candidate.link, label };
-      } catch { /* fall through to static */ }
+      const domain = new URL(candidate.link).hostname.replace(/^www\./, "");
+      const label = domain.split(".").slice(0, -1).join(" ")
+        .replace(/-/g, " ").split(" ")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") || domain;
+      console.log(`[CITATION_LIVE] "${sectionTitle}" → ${candidate.link}`);
+      return { url: candidate.link, label };
     }
   } catch (err: any) {
-    console.warn("[CITATION_LIVE] Serper lookup failed:", err.message);
+    console.warn("[CITATION_LIVE] Serper failed:", err.message);
   }
   return STATIC_FALLBACKS[fallbackIndex % STATIC_FALLBACKS.length];
 }
 
 // ---------------------------------------------------------------------------
-// Format instructions
+// Format instructions per section type
 // ---------------------------------------------------------------------------
 function getFormatInstruction(requiredFormat: string, maxS: number = 2): string {
   switch (requiredFormat) {
@@ -177,8 +156,7 @@ function getFormatInstruction(requiredFormat: string, maxS: number = 2): string 
     default:
       return `OUTPUT FORMAT — SHORT PARAGRAPHS:
 - EXACTLY 2–3 <p> blocks. Each <p>: MAX ${maxS} sentences. ABSOLUTE HARD LIMIT.
-- Each sentence: max 20 words. Active voice. Lead with the most critical fact.
-- Use <strong> for exactly 1–2 key data points. Include ONE specific stat.
+- Lead with the most critical fact. Use <strong> for 1–2 key data points. Include ONE specific stat.
 - After the last <p>, add ONE styled callout:
   <div style="background:#faf5ff;border-left:4px solid #8b5cf6;padding:14px 18px;margin:20px 0;border-radius:0 8px 8px 0;">
     <p style="margin:0 0 4px;font-weight:700;color:#8b5cf6;font-size:0.8em;text-transform:uppercase;letter-spacing:0.05em;">📊 By the Numbers</p>
@@ -189,7 +167,7 @@ function getFormatInstruction(requiredFormat: string, maxS: number = 2): string 
 
 function getLangRule(language: string): string {
   return language.toLowerCase().includes("tr")
-    ? "LANGUAGE: Fluent natural Turkish. No translation artifacts. Perfect grammar."
+    ? "LANGUAGE: Fluent natural Turkish. No translation artifacts."
     : "LANGUAGE: Native American English. Active voice, direct, confident.";
 }
 
@@ -243,80 +221,61 @@ export async function POST(req: NextRequest) {
     const brandName: string          = brand.brandName || "";
     const brandCta: string           = brand.callToAction || "";
 
-    // ── Internal link — semantic scoring + guaranteed uniqueness per section ─
-    //
-    // Strategy:
-    // 1. Score ALL sitemap URLs against this section's title + keyword.
-    // 2. Sort by score descending so most relevant URLs come first.
-    // 3. Use sectionIndex as an offset into the ranked list — each section
-    //    picks the Nth best match, guaranteeing a different URL per section
-    //    even when multiple URLs share the same top score.
-    // 4. If sectionIndex exceeds the list length, wrap around but still
-    //    prefer a URL not used by the immediately preceding sections.
+    // Narrative context from orchestrator
+    const narrativeThread: string  = researchBlueprint.narrativeThread || "";
+    const sectionRole: string      = sectionPlan.sectionRole || "body";
+    const assignedPAA: string|null = sectionPlan.assignedPAA || null;
+    const contentGap: string|null  = sectionPlan.contentGap || null;
+    const prevTitle: string|null   = sectionPlan.prevSectionTitle || null;
+    const nextTitle: string|null   = sectionPlan.nextSectionTitle || null;
+
+    // ── Internal link — semantic scoring + guaranteed uniqueness ──────────
+    const stopWords = new Set([
+      "with","that","this","from","have","will","your","their","which","about",
+      "into","more","also","such","each","than","when","were","been","they",
+      "what","where","some","these","those","both","after","being","there",
+      "through","during","before","between","should","could","would",
+    ]);
     const allInternalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
     let linkInstruction = "";
-
-    // Only inject on even-indexed sections (0, 2, 4...) — max 5 links per article
     const internalLinkSlot = Math.floor(sectionIndex / 2);
     const maxInternalLinks = 5;
 
     if (allInternalLinks.length > 0 && internalLinkSlot < maxInternalLinks) {
-      // Normalize section title + keyword into meaningful query terms (skip short stop words)
-      const stopWords = new Set(["with","that","this","from","have","will","your","their","which","about","into","more","also","such","each","than","when","were","been","they","what","where","some","these","those","both","after","being","there","through","during","before","between","should","could","would"]);
-
       const queryTerms = `${sectionPlan.title} ${keyword}`
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
+        .toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
         .filter((w) => w.length > 3 && !stopWords.has(w));
 
-      // Score each URL by how many query terms appear in its path segments
       const scoredLinks = allInternalLinks.map((url) => {
         try {
-          // Use pathname only for cleaner matching — strip domain noise
           const urlObj = new URL(url);
-          const path = (urlObj.pathname + " " + urlObj.hostname)
-            .toLowerCase()
-            .replace(/[-_/]/g, " ");
+          const path = (urlObj.pathname + " " + urlObj.hostname).toLowerCase().replace(/[-_/]/g, " ");
           const score = queryTerms.reduce(
-            (acc, term) => acc + (path.includes(term) ? 2 : 0) + (url.toLowerCase().includes(term) ? 1 : 0),
-            0
+            (acc, term) => acc + (path.includes(term) ? 2 : 0) + (url.toLowerCase().includes(term) ? 1 : 0), 0
           );
           return { url, score };
-        } catch {
-          return { url, score: 0 };
-        }
+        } catch { return { url, score: 0 }; }
       });
 
-      // Sort by score DESC, then by URL length ASC (shorter = more specific page)
       scoredLinks.sort((a, b) => b.score - a.score || a.url.length - b.url.length);
 
-      // Pick strategy: use sectionIndex as a hard offset into the scored list.
-      // This guarantees each section gets a DIFFERENT URL regardless of scores:
-      //   sectionIndex 0 → scoredLinks[0]  (best semantic match for section 0)
-      //   sectionIndex 2 → scoredLinks[1]  (second-best for section 2)
-      //   sectionIndex 4 → scoredLinks[2]  (third-best for section 4)
-      // Wraps with a prime-number offset (7) to spread across the full list
-      // and avoid cycling back to the same URLs when the list is short.
+      // Prime-number offset guarantees a different URL per section slot
       const pickIndex = (internalLinkSlot * 7) % scoredLinks.length;
-      const picked = scoredLinks[pickIndex];
-      const link = picked.url;
-
-      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} → ${link}`);
+      const link = scoredLinks[pickIndex].url;
+      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${scoredLinks[pickIndex].score} → ${link}`);
 
       linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a short inline anchor inside a sentence:
 <a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word anchor text]</a>
 CRITICAL RULES:
-- The <a> tag must wrap ONLY 3–5 words of anchor text — NEVER wrap an entire sentence, paragraph, or <li> element.
+- The <a> tag must wrap ONLY 3–5 words — NEVER an entire sentence, paragraph, or <li> element.
 - Correct: "...which is why <a href="...">retail execution tools</a> matter..."
 - WRONG:  <a href="..."><li>Entire bullet point text here...</li></a>
-- WRONG:  <a href="...">The entire sentence wrapped as a link.</a>
-- Anchor text must be a natural noun phrase describing the destination page topic.
+- Anchor text must be a natural noun phrase describing the destination page.
 
 `;
     }
 
-    // ── Live citations — two real article URLs fetched in parallel ────────
+    // ── Live citations — two per section, parallel fetch ─────────────────
     const [cite1, cite2] = await Promise.all([
       fetchLiveCitation(keyword, sectionPlan.title, sectionIndex),
       fetchLiveCitation(keyword, `${sectionPlan.title} data statistics`, sectionIndex + 10),
@@ -327,47 +286,45 @@ CRITICAL RULES:
 2. In a different paragraph: <a href="${cite2.url}" target="_blank" rel="nofollow" style="color:#2563eb;text-decoration:underline;">${cite2.label}</a> — embed in natural prose.
 RULES: Both links MUST appear. Stats must include real numbers. Use ONLY these exact URLs.`;
 
-    // ── Keyword density ─────────────────────────────────────────────────────
+    // ── Keyword density ──────────────────────────────────────────────────
     const kwInstruction = selectedKeywords.length > 0
       ? `[KEYWORDS]: Use naturally (1–2% density): ${selectedKeywords.slice(0, 5).join(", ")}.`
       : "";
 
-    // ── Brand voice — only when enabled, on select sections ──────────────────
-    // Inject on sections 1, 3, and the last (5+) for natural distribution.
-    // Skip section 0 (intro) and don’t hit every section — keeps tone editorial.
-    const isBrandSection =
-      brandEnabled &&
-      brandName &&
-      (sectionIndex === 1 || sectionIndex === 3 || sectionIndex >= 5);
-
-    // Brand description and features from /brand config for richer placement
-    const brandDesc: string  = brand.description || "";
+    // ── Brand voice — distributed, not last-paragraph-only ───────────────
+    const brandDesc: string     = brand.description || "";
     const brandFeatures: string = brand.keyFeatures || brand.features || "";
+    const isBrandSection = brandEnabled && brandName &&
+      (sectionIndex === 1 || sectionIndex === 3 || sectionIndex >= 5);
 
     const brandInstruction = isBrandSection
       ? `[BRAND VOICE — REQUIRED IN THIS SECTION]:
-Weave "${brandName}" into the narrative NATURALLY — not in the last paragraph, but integrated where it fits the topic flow.
-
-Placement rules:
-1. EARLY placement: Mention ${brandName} within the first or second paragraph of this section, not at the end.
-2. CONTEXTUAL framing: Connect the brand to the specific problem or insight being discussed here.
-   Example patterns:
-   - "...which is exactly the problem ${brandName} was built to solve."
-   - "Platforms like ${brandName} address this by..."
-   - "Teams running ${brandName} report [specific outcome related to this section's topic]."
-3. Use these brand facts to make the mention specific and credible:
-   ${brandDesc ? `Brand description: ${brandDesc.slice(0, 200)}` : ""}
-   ${brandFeatures ? `Key capabilities: ${brandFeatures.slice(0, 200)}` : ""}
-4. ONE mention only — but make it earn its place with a real benefit claim, not a generic namecheck.
-5. Only add CTA if this section naturally concludes a point: "${brandCta}"`
+Weave "${brandName}" into the narrative NATURALLY — not in the last paragraph.
+1. EARLY placement: Mention ${brandName} within the first or second paragraph.
+2. CONTEXTUAL framing: Connect the brand to the specific problem discussed here.
+   Patterns: "Platforms like ${brandName} address this by..." / "Teams using ${brandName} report..."
+3. Brand facts for credibility: ${brandDesc ? brandDesc.slice(0, 150) : ""} ${brandFeatures ? `| Features: ${brandFeatures.slice(0, 150)}` : ""}
+4. ONE mention only — make it earn its place with a real benefit claim.
+5. Only add CTA if this section concludes a point: "${brandCta}"`
       : "";
 
-    // ── Sub-headings — cover every H3/H4 the user added ───────────────────
+    // ── Sub-headings ──────────────────────────────────────────────────────
     const subHeadingInstruction = subHeadings.length > 0
       ? `[SUB-SECTIONS REQUIRED]:
 ${subHeadings.map((sh, i) => `  ${i + 1}. ${sh}`).join("\n")}
 For each: <h3> or <h4> heading + 1–2 short <p> (max 2 sentences, max 20 words each).`
       : "";
+
+    // ── Narrative context instructions ────────────────────────────────────
+    const narrativeInstruction = [
+      narrativeThread ? `[ARTICLE NARRATIVE — EDITORIAL BRIEF]:\n"${narrativeThread}"\nEvery sentence should feel like it belongs in this story arc.` : "",
+      sectionRole === "intro" ? "[INTRO ROLE]: Hook the reader with a striking stat or problem in the very first sentence. Preview the article's value without giving everything away." : "",
+      sectionRole === "conclusion" ? "[CONCLUSION ROLE]: Synthesize key insights into 2–3 actionable takeaways. Do NOT repeat earlier content verbatim — elevate it. End with a forward-looking statement." : "",
+      assignedPAA ? `[PAA ANSWER — REQUIRED]: Directly answer this question within the first 2 sentences (featured snippet format), then expand: "${assignedPAA}"` : "",
+      contentGap ? `[COMPETITOR GAP TO EXPLOIT]: No competitor covers this — make it a strength of this section: "${contentGap}"` : "",
+      prevTitle ? `[TRANSITION FROM PREVIOUS]: The previous section covered "${prevTitle}". Open with a brief connective sentence bridging from that topic.` : "",
+      nextTitle ? `[SETUP FOR NEXT]: The next section covers "${nextTitle}". Close with a sentence that naturally sets up that transition.` : "",
+    ].filter(Boolean).join("\n\n");
 
     // ── System prompt ─────────────────────────────────────────────────────
     const systemPrompt = `You are a concise, data-driven WordPress SEO content writer.
@@ -385,10 +342,16 @@ ${getLangRule(language)}
 ═══════════════════════════════
 
 ${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParagraphSentences || 2, 2))}
+
 ${subHeadingInstruction}
+
 ${linkInstruction}
+
 ${kwInstruction}
+
 ${brandInstruction}
+
+${narrativeInstruction}
 
 Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
@@ -402,30 +365,28 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    // ── Image — generated for every section (one per H2) ───────────────────
+    // ── Image — every section ─────────────────────────────────────────────
     let imgHtml = "";
-    if (true) { // Every section gets an image
-      try {
-        const imgPromptRes = await anthropic.messages.create({
-          model: "claude-sonnet-4-6", max_tokens: 100,
-          messages: [{ role: "user", content:
-            `Photorealistic editorial image for "${sectionPlan.title}" about "${keyword}". Professional, no text in image. Max 80 chars.` }],
-          temperature: 0.7,
-        });
-        const imgPromptBlock = imgPromptRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-        const imgPrompt = (imgPromptBlock?.text || `Professional editorial photo about ${keyword}`).slice(0, 80);
-        const imageDataUri = await generateImageWithGemini(imgPrompt);
-        const imgSrc = imageDataUri
-          ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;
+    try {
+      const imgPromptRes = await anthropic.messages.create({
+        model: "claude-sonnet-4-6", max_tokens: 100,
+        messages: [{ role: "user", content:
+          `Photorealistic editorial image for "${sectionPlan.title}" about "${keyword}". Professional, no text in image. Max 80 chars.` }],
+        temperature: 0.7,
+      });
+      const imgPromptBlock = imgPromptRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+      const imgPrompt = (imgPromptBlock?.text || `Professional editorial photo about ${keyword}`).slice(0, 80);
+      const imageDataUri = await generateImageWithGemini(imgPrompt);
+      const imgSrc = imageDataUri
+        ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;
 
-        imgHtml = `<!-- wp:image {"sizeSlug":"large"} -->
+      imgHtml = `<!-- wp:image {"sizeSlug":"large"} -->
 <figure style="margin:28px 0;text-align:center;">
   <img src="${imgSrc}" alt="${sectionPlan.title.replace(/"/g, "&quot;")}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" />
   <figcaption style="text-align:center;font-size:0.82em;color:#6b7280;font-style:italic;margin-top:6px;">${sectionPlan.title}</figcaption>
 </figure>
 <!-- /wp:image -->`;
-      } catch { /* image failure must never block content delivery */ }
-    }
+    } catch { /* image failure must never block content delivery */ }
 
     // ── Lead summary (section 0 only) ─────────────────────────────────────
     let leadSummaryHtml = "";

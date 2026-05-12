@@ -72,12 +72,19 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         if (configLang === "tr" || configLang.includes("türk")) targetLanguage = "tr-TR";
         if (configLang === "es" || configLang.includes("spanish")) targetLanguage = "es-ES";
 
-        // Pass the user's exact headings — engine will write content for each one
+        // Pass headings + ResearchAccordion data (questions, gaps) to the engine
+        const questions = (outlineData as any).researchData?.questions
+            ?.map((q: any) => typeof q === "string" ? q : q.text)
+            ?.filter(Boolean) || [];
+        const gaps = (outlineData as any).researchData?.gaps || [];
+
         startGeneration({
             keyword,
             targetLanguage,
             userHeadings: outlineData.headings || [],
             selectedKeywords,
+            questions,
+            gaps,
         });
 
         return () => { executionLock.current = false; };
@@ -111,8 +118,9 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         const map: Record<string, number> = {
             IDLE: 0,
             RESEARCHING: 15,
-            WRITING_SECTION: 55,
-            QA_CHECK: 78,
+            ORCHESTRATING: 35,
+            WRITING_SECTION: 60,
+            QA_CHECK: 80,
             GENERATING_SEO: 93,
             COMPLETED: 100,
         };
@@ -124,6 +132,7 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         switch (status) {
             case "IDLE": return "Initializing AI Engine...";
             case "RESEARCHING": return "🔍 Loading brand context and sitemap links...";
+            case "ORCHESTRATING": return "🧠 Building narrative blueprint and section plan...";
             case "WRITING_SECTION": return `✍️  Writing: ${currentSectionName || "..."}`;
             case "QA_CHECK": return `🛡️  QA review: ${currentSectionName || "..."}`;
             case "GENERATING_SEO": return "🎯  Generating Rank Math SEO metadata...";

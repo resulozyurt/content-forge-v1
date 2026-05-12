@@ -74,10 +74,21 @@ export async function POST(req: NextRequest) {
 
     const safeKeyword = keyword || "Target Keyword";
 
+    // selectedKeywords, questions, gaps come from useContentEngine which passes
+    // the ResearchAccordion data — inject them so the writer pipeline can use them
+    const selectedKeywords: string[] = body.selectedKeywords || [];
+    const questions: string[] = (body.questions || []).map((q: any) =>
+      typeof q === "string" ? q : q.text || ""
+    ).filter(Boolean);
+    const gaps: string[] = body.gaps || [];
+
     const researchBlueprint = {
       keyword: safeKeyword,
       language: targetLanguage || "en-US",
       brandGuidelines: brandContext,
+      selectedKeywords,
+      questions,
+      gaps,
       extractedContext: {
         topHeaders: ["Core Concepts", "Benefits", "Implementation", "Cost Analysis"],
         mandatoryEntities: [safeKeyword],
