@@ -222,21 +222,32 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { researchBlueprint, sectionPlan, sectionIndex, allSectionTitles } = await req.json();
-    const language: string       = researchBlueprint.language || "en-US";
-    const keyword: string        = researchBlueprint.keyword || "Topic";
-    const articleTitle: string   = researchBlueprint.articleTitle || keyword;
+    const language: string           = researchBlueprint.language || "en-US";
+    const keyword: string            = researchBlueprint.keyword || "Topic";
+    const articleTitle: string       = researchBlueprint.articleTitle || keyword;
     const selectedKeywords: string[] = researchBlueprint.selectedKeywords || [];
-    const isFirstSection         = sectionIndex === 0;
-    const subHeadings: string[]  = sectionPlan.subHeadings || [];
+    const isFirstSection             = sectionIndex === 0;
+    const subHeadings: string[]      = sectionPlan.subHeadings || [];
+    const brand                      = researchBlueprint.brandGuidelines || {};
+    const brandEnabled: boolean      = brand.isEnabled === true;
+    const brandName: string          = brand.brandName || "";
+    const brandCta: string           = brand.callToAction || "";
 
-    // ── Internal link ─────────────────────────────────────────────────────
-    const internalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
+    // ── Internal link — inject every other section, max 5 total ──────────
+    // Uses a unique link per section slot. Research route already shuffled links.
+    // Only inject on even-indexed sections (0, 2, 4...) to avoid over-linking.
+    const allInternalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
     let linkInstruction = "";
-    if (internalLinks.length > 0) {
-      const link = internalLinks[sectionIndex % internalLinks.length];
-      linkInstruction = `[INTERNAL LINK]: Embed ONCE naturally:
-<a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word relevant anchor text]</a>
-Never "click here" or bare URL.\n\n`;
+    const internalLinkSlot = Math.floor(sectionIndex / 2);
+    const maxInternalLinks = 5;
+
+    if (allInternalLinks.length > 0 && internalLinkSlot < maxInternalLinks) {
+      const link = allInternalLinks[internalLinkSlot % allInternalLinks.length];
+      linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a natural anchor in a sentence:
+<a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word topically relevant anchor text]</a>
+RULES: Anchor text must describe the destination page topic. NEVER use "click here", the brand name alone, or the raw URL.
+
+`;
     }
 
     // ── Live citations — two real article URLs fetched in parallel ────────
@@ -250,9 +261,26 @@ Never "click here" or bare URL.\n\n`;
 2. In a different paragraph: <a href="${cite2.url}" target="_blank" rel="nofollow" style="color:#2563eb;text-decoration:underline;">${cite2.label}</a> — embed in natural prose.
 RULES: Both links MUST appear. Stats must include real numbers. Use ONLY these exact URLs.`;
 
-    // ── Keyword density ────────────────────────────────────────────────────
+    // ── Keyword density ─────────────────────────────────────────────────────
     const kwInstruction = selectedKeywords.length > 0
       ? `[KEYWORDS]: Use naturally (1–2% density): ${selectedKeywords.slice(0, 5).join(", ")}.`
+      : "";
+
+    // ── Brand voice — only when enabled, on select sections ──────────────────
+    // Inject on sections 1, 3, and the last (5+) for natural distribution.
+    // Skip section 0 (intro) and don’t hit every section — keeps tone editorial.
+    const isBrandSection =
+      brandEnabled &&
+      brandName &&
+      (sectionIndex === 1 || sectionIndex === 3 || sectionIndex >= 5);
+
+    const brandInstruction = isBrandSection
+      ? `[BRAND VOICE — MANDATORY FOR THIS SECTION]:
+Naturally weave "${brandName}" into the content ONCE. Rules:
+1. Position ${brandName} as the recommended solution for the challenge discussed in this section.
+2. Educational, not salesy: "Teams using ${brandName} report..." or "Platforms like ${brandName}..."
+3. If contextually appropriate, close with: "${brandCta}"
+4. Do NOT force it — if the topic has zero connection to the brand, skip entirely.`
       : "";
 
     // ── Sub-headings — cover every H3/H4 the user added ───────────────────
@@ -281,6 +309,7 @@ ${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParag
 ${subHeadingInstruction}
 ${linkInstruction}
 ${kwInstruction}
+${brandInstruction}
 
 Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
