@@ -99,6 +99,14 @@ export function useContentEngine() {
         setStatus("WRITING_SECTION");
         setCurrentSectionName(section.title);
 
+        // Rate-limit guard: wait between sections to avoid hitting Anthropic's
+        // 20,000 input token/minute ceiling (Tier 1). Each writer call uses
+        // ~3,000-4,000 tokens. A 3.5s delay keeps us safely under the limit
+        // while keeping generation fast enough for a good UX.
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+        }
+
         const writerRes = await fetch("/api/v2/generator/writer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

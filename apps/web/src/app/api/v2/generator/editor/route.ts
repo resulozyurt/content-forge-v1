@@ -124,6 +124,23 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Auto-correct via Claude ─────────────────────────────────────────────
+    // Strip <figure>/<img> blocks before sending to Claude — base64 images
+    // can exceed 1M tokens and crash the API. Re-inject them after correction.
+    const figureRegex = /<figure[\s\S]*?<\/figure>/gi;
+    const extractedFigures: string[] = [];
+    let chunkForClaude = generatedChunk.replace(figureRegex, (match: string) => {
+      extractedFigures.push(match);
+      return `%%FIGURE_${extractedFigures.length - 1}%%`;
+    });
+
+    // Also strip standalone <img> tags not wrapped in <figure>
+    const imgRegex = /<img(?:[^>]*)src="data:[^"]{100,}"[^>]*>/gi;
+    const extractedImgs: string[] = [];
+    chunkForClaude = chunkForClaude.replace(imgRegex, (match: string) => {
+      extractedImgs.push(match);
+      return `%%IMG_${extractedImgs.length - 1}%%`;
+    });
+
     const isTurkish = (language || "").toLowerCase().includes("tr");
     const langRule = isTurkish
       ? "Output language: Akıcı, doğal Türkçe. Çeviri kokusu olmamalı."
@@ -136,7 +153,7 @@ ${validationErrors.map((e, i) => `${i + 1}. ${e}`).join("\n")}
 
 ABSOLUTE RULES:
 1. ${langRule}
-2. PRESERVE unchanged: <h2>, <figure>, <img>, <figcaption>, existing <a> links.
+2. PRESERVE unchanged: <h2>, %%FIGURE_N%% placeholders, %%IMG_N%% placeholders, existing <a> links.
 3. Each <p> tag: MAX ${maxSentences} sentences. Split longer text into multiple <p> tags.
 4. Zero Markdown — only raw HTML output.
 5. If adding a citation link, use: <a href="[URL]" target="_blank" rel="nofollow" style="color:#2563eb;text-decoration:underline;">[Publication Name]</a>
@@ -144,7 +161,7 @@ ABSOLUTE RULES:
 
 DRAFT TO CORRECT:
 ---
-${generatedChunk}
+${chunkForClaude}
 ---`;
 
     try {
@@ -158,11 +175,19 @@ ${generatedChunk}
       const contentBlock = response.content.find(
         (block): block is Anthropic.TextBlock => block.type === "text"
       );
-      const correctedChunk = (contentBlock?.text || generatedChunk)
+      let correctedChunk = (contentBlock?.text || chunkForClaude)
         .replace(/^```html\s*/i, "")
         .replace(/^```\s*/i, "")
         .replace(/```\s*$/i, "")
         .trim();
+
+      // Re-inject extracted figures and images back into corrected content
+      extractedFigures.forEach((fig, idx) => {
+        correctedChunk = correctedChunk.replace(`%%FIGURE_${idx}%%`, fig);
+      });
+      extractedImgs.forEach((img, idx) => {
+        correctedChunk = correctedChunk.replace(`%%IMG_${idx}%%`, img);
+      });
 
       return NextResponse.json({ status: "corrected", chunk: correctedChunk }, { status: 200 });
     } catch (claudeErr) {
