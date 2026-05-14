@@ -188,12 +188,20 @@ export async function POST(req: NextRequest) {
     const brandCta: string           = brand.callToAction || "";
 
     // Narrative context from orchestrator
-    const narrativeThread: string  = researchBlueprint.narrativeThread || "";
-    const sectionRole: string      = sectionPlan.sectionRole || "body";
-    const assignedPAA: string|null = sectionPlan.assignedPAA || null;
-    const contentGap: string|null  = sectionPlan.contentGap || null;
-    const prevTitle: string|null   = sectionPlan.prevSectionTitle || null;
-    const nextTitle: string|null   = sectionPlan.nextSectionTitle || null;
+    const narrativeThread: string    = researchBlueprint.narrativeThread || "";
+    const storySpine: string         = researchBlueprint.storySpine || "";
+    const uniqueAngle: string        = researchBlueprint.uniqueAngle || "";
+    const sectionRole: string        = sectionPlan.sectionRole || "body";
+    const assignedPAA: string|null   = sectionPlan.assignedPAA || null;
+    const contentGap: string|null    = sectionPlan.contentGap || null;
+    const prevTitle: string|null     = sectionPlan.prevSectionTitle || null;
+    const nextTitle: string|null     = sectionPlan.nextSectionTitle || null;
+    // Context chaining — closing summary of the previous section
+    const prevSectionSummary: string|null = sectionPlan.prevSectionSummary || null;
+
+    // Detect if heading promises a numbered list (e.g. "5 Myths", "7 Steps")
+    const numberedHeadingMatch = sectionPlan.title.match(/(\d+)\s+(myth|step|way|strateg|tip|reason|sign|mistake|lesson|factor|tool|question|example|benefit|advantage)/i);
+    const promisedCount: number | null = numberedHeadingMatch ? parseInt(numberedHeadingMatch[1], 10) : null;
 
     // ── Internal link — semantic scoring + guaranteed uniqueness ──────────
     const stopWords = new Set([
@@ -259,18 +267,33 @@ RULES: Both links MUST appear. Stats must include real numbers. Use ONLY these e
     // ── Brand voice — distributed, not last-paragraph-only ───────────────
     const brandDesc: string     = brand.description || "";
     const brandFeatures: string = brand.keyFeatures || brand.features || "";
-    const isBrandSection = brandEnabled && brandName &&
-      (sectionIndex === 1 || sectionIndex === 3 || sectionIndex >= 5);
+
+    // P5 fix: Brand enters only after reader understands the problem (sections 4+).
+    // Never in intro or early educational sections. Max 4 mentions per article.
+    // Conclusion section always gets a CTA mention if brand is enabled.
+    const isBrandSection = brandEnabled && brandName && (
+      sectionIndex >= 4 ||
+      sectionRole === "conclusion" ||
+      sectionRole === "cta"
+    );
 
     const brandInstruction = isBrandSection
-      ? `[BRAND VOICE — REQUIRED IN THIS SECTION]:
-Weave "${brandName}" into the narrative NATURALLY — not in the last paragraph.
-1. EARLY placement: Mention ${brandName} within the first or second paragraph.
-2. CONTEXTUAL framing: Connect the brand to the specific problem discussed here.
-   Patterns: "Platforms like ${brandName} address this by..." / "Teams using ${brandName} report..."
-3. Brand facts for credibility: ${brandDesc ? brandDesc.slice(0, 150) : ""} ${brandFeatures ? `| Features: ${brandFeatures.slice(0, 150)}` : ""}
-4. ONE mention only — make it earn its place with a real benefit claim.
-5. Only add CTA if this section concludes a point: "${brandCta}"`
+      ? `[BRAND VOICE RULES — READ CAREFULLY]:
+Allowed mention types ONLY:
+1. Capability: "${brandName} does X, which solves Y" — tie to a specific claim
+2. Differentiator: "Unlike [category], ${brandName} approaches X by..."
+3. CTA (conclusion/cta sections only): "${brandCta}"
+
+NOT allowed:
+- Casual name-drops without a capability claim
+- Mentioning ${brandName} in definition or educational paragraphs
+- More than 1 mention in this section
+
+${sectionRole === "conclusion" || sectionRole === "cta"
+  ? `This is the conclusion — include ONE clear CTA: "${brandCta}"`
+  : `This is section ${sectionIndex + 1}. The reader now understands the problem. Introduce ${brandName} as a solution with a specific capability claim.`}
+
+Brand facts: ${brandDesc ? brandDesc.slice(0, 150) : ""} ${brandFeatures ? `| Key features: ${brandFeatures.slice(0, 150)}` : ""}`
       : "";
 
     // ── Sub-headings ──────────────────────────────────────────────────────
@@ -280,15 +303,53 @@ ${subHeadings.map((sh, i) => `  ${i + 1}. ${sh}`).join("\n")}
 For each: <h3> or <h4> heading + 1–2 short <p> (max 2 sentences, max 20 words each).`
       : "";
 
-    // ── Narrative context instructions ────────────────────────────────────
+    // ── Narrative + quality instructions (P1, P2, P3, P6, P7) ─────────────
     const narrativeInstruction = [
-      narrativeThread ? `[ARTICLE NARRATIVE — EDITORIAL BRIEF]:\n"${narrativeThread}"\nEvery sentence should feel like it belongs in this story arc.` : "",
-      sectionRole === "intro" ? "[INTRO ROLE]: Hook the reader with a striking stat or problem in the very first sentence. Preview the article's value without giving everything away." : "",
-      sectionRole === "conclusion" ? "[CONCLUSION ROLE]: Synthesize key insights into 2–3 actionable takeaways. Do NOT repeat earlier content verbatim — elevate it. End with a forward-looking statement." : "",
-      assignedPAA ? `[PAA ANSWER — REQUIRED]: Directly answer this question within the first 2 sentences (featured snippet format), then expand: "${assignedPAA}"` : "",
-      contentGap ? `[COMPETITOR GAP TO EXPLOIT]: No competitor covers this — make it a strength of this section: "${contentGap}"` : "",
-      prevTitle ? `[TRANSITION FROM PREVIOUS]: The previous section covered "${prevTitle}". Open with a brief connective sentence bridging from that topic.` : "",
-      nextTitle ? `[SETUP FOR NEXT]: The next section covers "${nextTitle}". Close with a sentence that naturally sets up that transition.` : "",
+
+      // P6: Unique angle enforcement — non-negotiable
+      uniqueAngle ? `[REQUIRED CONTENT ANGLE — NON-NEGOTIABLE]:
+"${uniqueAngle}"
+This angle MUST be reflected in this section if it is the intro, the section most directly related to this angle, or the conclusion. Do not let generic SEO content override this perspective.` : "",
+
+      // P1a: Story arc positioning
+      storySpine ? `[STORY ARC CONTEXT]:
+${storySpine}
+Your section advances this arc. Do NOT restart from the beginning — assume the reader has read everything before this.` : "",
+
+      // P1b: Context chaining — open with bridge from previous section
+      prevSectionSummary ? `[BRIDGE FROM PREVIOUS SECTION — MANDATORY]:
+The previous section ended with this context: "${prevSectionSummary}"
+Your OPENING SENTENCE must logically continue from this — not start a new topic from scratch.
+DO NOT use: "In this section...", "Now let's look at...", "Another important..."
+INSTEAD: Open with an insight or consequence that flows naturally from what was just established.` : "",
+
+      // P1b: Closing hook — set up next section
+      nextTitle ? `[CLOSING HOOK — MANDATORY]:
+End this section with ONE sentence that makes the reader need what comes next: "${nextTitle}"
+Do NOT write: "In the next section we will..." — instead, end with an insight or open question that makes "${nextTitle}" feel inevitable.` : "",
+
+      // Role-specific guidance
+      sectionRole === "intro" ? `[INTRO ROLE]: Open with a striking stat or problem that immediately identifies with the reader's pain. Preview the article's value — don't give everything away. NO brand mentions here.` : "",
+      sectionRole === "conclusion" ? `[CONCLUSION ROLE]: Synthesize 2–3 actionable takeaways. Do NOT repeat earlier content verbatim — elevate it with a new perspective. End with a forward-looking statement or CTA.` : "",
+
+      // P3: Stat discipline — prevent over-loading
+      `[STATISTICAL DISCIPLINE]:
+- Maximum 2 statistics in this section
+- Each stat must directly support the argument — not replace it
+- Do NOT open a sentence with "According to [source]"
+- Integrate data into your argument: WRONG: "According to CMU, 80% of costs are locked in preconstruction." RIGHT: "Over 80% of a project's final cost is locked in before ground is broken — which is why most cost control efforts arrive too late."
+- Source attribution in parentheses after the insight, not as the sentence opener`,
+
+      // P7: Tone — practitioner voice, not academic
+      `[VOICE]: Write as an experienced practitioner talking to a peer — not as a researcher citing literature. Be direct, specific, and opinionated. Avoid hedging language like "it can be argued that" or "research suggests".`,
+
+      // PAA + gap
+      assignedPAA ? `[PAA ANSWER]: Directly answer within the first 2 sentences (featured snippet format): "${assignedPAA}"` : "",
+      contentGap ? `[COMPETITOR GAP — EXPLOIT THIS]: No competitor covers this angle — make it central to this section: "${contentGap}"` : "",
+
+      // P2: Truncation guard for numbered headings
+      promisedCount ? `[COMPLETION REQUIREMENT]: Your heading promises ${promisedCount} items. You MUST deliver exactly ${promisedCount} — count them before finishing. If you cannot fit all ${promisedCount} in the token budget, reduce the last number you can complete and note it clearly.` : "",
+
     ].filter(Boolean).join("\n\n");
 
     // ── System prompt ─────────────────────────────────────────────────────
@@ -320,8 +381,11 @@ ${narrativeInstruction}
 
 Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
+    // P2: Increase token budget for sections that promise multiple numbered items
+    const sectionMaxTokens = promisedCount && promisedCount >= 4 ? 3200 : 2000;
+
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6", max_tokens: 2000,
+      model: "claude-sonnet-4-6", max_tokens: sectionMaxTokens,
       system: systemPrompt,
       messages: [{ role: "user", content: `Write HTML for: "${sectionPlan.title}"` }],
       temperature: 0.4,
@@ -355,13 +419,51 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
       catch { /* non-critical */ }
     }
 
+    // ── P1 (Karar B): Generate section summary for next section's context chain ──
+    // A mini Claude call (~50 tokens) that creates a clean 2-sentence closing
+    // summary. The next section uses this as its opening bridge context.
+    let sectionSummary = "";
+    try {
+      const summaryRes = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 120,
+        temperature: 0.2,
+        messages: [{
+          role: "user",
+          content: `Summarize the closing argument of this section in exactly 2 sentences (max 30 words total). 
+Write as if ending the section's thought — the next section will continue from here.
+Section title: "${sectionPlan.title}"
+Section content (plain text): ${generatedHtml.replace(/<[^>]+>/g, " ").slice(0, 600)}
+Output ONLY the 2-sentence summary. No labels, no quotes.`,
+        }],
+      });
+      const summaryBlock = summaryRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+      sectionSummary = summaryBlock?.text?.trim() || "";
+    } catch { /* non-critical — context chaining degrades gracefully */ }
+
+    // ── P2: Sync heading number with actual item count ─────────────────────
+    // If heading promised N items but fewer were delivered, update the heading.
+    let finalTitle = sectionPlan.title;
+    if (promisedCount) {
+      // Count delivered items: numbered <li> elements or explicit numbered patterns
+      const liCount = (generatedHtml.match(/<li[\s>]/gi) || []).length;
+      const deliveredCount = liCount > 0 ? liCount : promisedCount;
+      if (deliveredCount < promisedCount && deliveredCount > 0) {
+        finalTitle = sectionPlan.title.replace(
+          /\d+/,
+          String(deliveredCount)
+        );
+        console.log(`[HEADING_SYNC] "${sectionPlan.title}" → "${finalTitle}" (delivered ${deliveredCount}/${promisedCount})`);
+      }
+    }
+
     // ── Assemble ──────────────────────────────────────────────────────────
-    const h2 = `<h2 style="font-size:1.6em;font-weight:700;margin:36px 0 18px;padding-bottom:8px;border-bottom:2px solid #e0e7ff;color:#1e293b;">${sectionPlan.title}</h2>`;
+    const h2 = `<h2 style="font-size:1.6em;font-weight:700;margin:36px 0 18px;padding-bottom:8px;border-bottom:2px solid #e0e7ff;color:#1e293b;">${finalTitle}</h2>`;
     const finalChunk = isFirstSection
       ? `\n${leadSummaryHtml}\n${h2}\n${imgHtml}\n${generatedHtml}`
       : `${h2}\n${imgHtml}\n${generatedHtml}`;
 
-    return NextResponse.json({ chunk: finalChunk }, { status: 200 });
+    return NextResponse.json({ chunk: finalChunk, sectionSummary }, { status: 200 });
   } catch (error) {
     console.error("[WRITER_AGENT_ERROR]", error);
     return NextResponse.json({ error: "Writing failed." }, { status: 500 });

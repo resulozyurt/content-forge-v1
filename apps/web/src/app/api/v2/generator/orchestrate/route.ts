@@ -168,29 +168,45 @@ export async function POST(req: NextRequest) {
 
     const narrativeRes = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 600,
+      max_tokens: 900,
       temperature: 0.3,
       messages: [{
         role: "user",
-        content: `You are an editorial director. Write a brief narrative thread (3-4 sentences, ${langRule}) for an article about "${keyword}".
+        content: `You are an editorial director planning a high-quality ${langRule} article about "${keyword}".
 Search intent: ${searchIntent}
-Sections: ${sections.map((s: any) => s.title).join(" → ")}
+Sections in order: ${sections.map((s: any, i: number) => `${i + 1}. ${s.title}`).join(" | ")}
 
-The narrative thread is a private editorial brief — not published. It describes:
-1. The reader's core problem or question
-2. The journey the article takes them on
-3. The transformation or insight they leave with
+Write a private editorial blueprint with THREE parts. Output ONLY valid JSON, no markdown:
 
-Be specific to this topic. No generic filler. Output ONLY the narrative thread text.`
+{
+  "narrativeThread": "3-4 sentences describing the reader's problem, the journey through the article, and the insight they leave with. Be specific to this exact topic — no generic filler.",
+  "storySpine": "The article follows this arc: Section 1-2 establish the problem and why standard approaches fail. Section 3-4 reveal the root cause the reader hasn't considered. Section 5-6 present a practical path forward. Final section drives action. Each section must ADVANCE this arc — never restart from scratch.",
+  "uniqueAngle": "In 1-2 sentences, state the single most differentiated angle this article takes that competitors miss. This MUST appear in the intro hook, at least one dedicated H2, and the conclusion. It is non-negotiable."
+}`
       }],
     });
 
     const narrativeBlock = narrativeRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-    const narrativeThread = narrativeBlock?.text?.trim() || "";
+    let narrativeThread = "";
+    let storySpine = "";
+    let uniqueAngle = "";
+
+    try {
+      const raw = (narrativeBlock?.text || "").replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+      const parsed = JSON.parse(raw);
+      narrativeThread = parsed.narrativeThread || "";
+      storySpine = parsed.storySpine || "";
+      uniqueAngle = parsed.uniqueAngle || "";
+    } catch {
+      // Fallback: treat entire response as narrative thread
+      narrativeThread = narrativeBlock?.text?.trim() || "";
+    }
 
     // ── Step 3: Return enriched blueprint ─────────────────────────────────
     return NextResponse.json({
       narrativeThread,
+      storySpine,
+      uniqueAngle,
       enrichedSections,
     }, { status: 200 });
 

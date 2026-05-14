@@ -72,6 +72,8 @@ export function useContentEngine() {
       setStatus("ORCHESTRATING");
       let enrichedSections = rawSections;
       let narrativeThread = "";
+      let storySpine = "";
+      let uniqueAngle = "";
 
       try {
         const orchRes = await fetch("/api/v2/generator/orchestrate", {
@@ -83,10 +85,15 @@ export function useContentEngine() {
           const orchData = await orchRes.json();
           enrichedSections = orchData.enrichedSections || rawSections;
           narrativeThread = orchData.narrativeThread || "";
+          storySpine = orchData.storySpine || "";
+          uniqueAngle = orchData.uniqueAngle || "";
         }
       } catch {
         console.warn("[ENGINE] Orchestration failed — falling back to raw sections");
       }
+
+      // Track per-section summaries for context chaining (P1 — bridge sentences)
+      const sectionSummaries: string[] = [];
 
       // H1
       const h1Html = `<h1 style="font-size:2.2em;font-weight:800;line-height:1.3;margin:0 0 32px;color:#0f172a;">${articleTitle}</h1>\n\n`;
@@ -111,8 +118,19 @@ export function useContentEngine() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            researchBlueprint: { ...researchBlueprint, articleTitle, narrativeThread },
-            sectionPlan: section,
+            researchBlueprint: {
+              ...researchBlueprint,
+              articleTitle,
+              narrativeThread,
+              storySpine,
+              uniqueAngle,
+            },
+            sectionPlan: {
+              ...section,
+              // Context chaining: pass the previous section's closing summary
+              // so the writer can open with a natural bridge sentence
+              prevSectionSummary: i > 0 ? sectionSummaries[i - 1] : null,
+            },
             sectionIndex: i,
             allSectionTitles,
           }),
@@ -122,7 +140,14 @@ export function useContentEngine() {
           console.warn(`[ENGINE] Writer failed section ${i}: "${section.title}" — skipping`);
           continue;
         }
-        const { chunk: draftChunk } = await writerRes.json();
+        const { chunk: draftChunk, sectionSummary: newSummary } = await writerRes.json();
+
+        // Store the summary for the next section's context chaining
+        if (newSummary) {
+          sectionSummaries.push(newSummary);
+        } else {
+          sectionSummaries.push(""); // placeholder to keep index alignment
+        }
 
         setStatus("QA_CHECK");
         let finalChunk = draftChunk;
