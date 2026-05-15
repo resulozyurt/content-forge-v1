@@ -91,10 +91,15 @@ function getCitationFromPool(
 
 // ---------------------------------------------------------------------------
 // Format instructions per section type
-// SORUN 4+5 FIX: Her format tipi için zengin HTML çıktısı zorunlu kılındı.
-// bullet_list ve key_points formatlarında H3 subheading'ler destekleniyor.
+// SORUN 2 FIX: "By the Numbers" callout artık sadece paragraph formatında
+// VE sectionIndex > 0 olduğunda ekleniyor. Her section'da çıkmasın diye
+// fonksiyona sectionIndex parametresi eklendi.
 // ---------------------------------------------------------------------------
-function getFormatInstruction(requiredFormat: string, maxS: number = 2): string {
+function getFormatInstruction(
+  requiredFormat: string,
+  maxS: number = 2,
+  sectionIndex: number = 0
+): string {
   switch (requiredFormat) {
     case "html_table":
       return `OUTPUT FORMAT — DATA TABLE:
@@ -132,16 +137,22 @@ function getFormatInstruction(requiredFormat: string, maxS: number = 2): string 
 - ONE closing <p> (max 2 sentences, 25 words).
 - If subheadings are provided, render each as <h3> with its own blockquote.`;
 
-    default:
-      return `OUTPUT FORMAT — SHORT PARAGRAPHS:
-- EXACTLY 2–3 <p> blocks. Each <p>: MAX ${maxS} sentences. ABSOLUTE HARD LIMIT.
-- Lead with the most critical fact. Use <strong> for 1–2 key data points. Include ONE specific stat.
-- After the last <p>, add ONE styled callout:
+    default: {
+      // SORUN 2 FIX: "By the Numbers" callout sadece body section'larda (index > 0)
+      // gösterilsin. Intro (index=0) ve conclusion bu callout'u almaz.
+      const byTheNumbers = sectionIndex > 0
+        ? `\n- After the last <p>, add ONE styled callout:
 <div style="background:#faf5ff;border-left:4px solid #8b5cf6;padding:14px 18px;margin:20px 0;border-radius:0 8px 8px 0;">
   <p style="margin:0 0 4px;font-weight:700;color:#8b5cf6;font-size:0.8em;text-transform:uppercase;letter-spacing:0.05em;">📊 By the Numbers</p>
   <p style="margin:0;color:#1f2937;font-size:0.95em;line-height:1.6;">[One specific stat — max 20 words]</p>
-</div>
+</div>`
+        : "\n- Do NOT add a 'By the Numbers' callout in this section.";
+
+      return `OUTPUT FORMAT — SHORT PARAGRAPHS:
+- EXACTLY 2–3 <p> blocks. Each <p>: MAX ${maxS} sentences. ABSOLUTE HARD LIMIT.
+- Lead with the most critical fact. Use <strong> for 1–2 key data points. Include ONE specific stat.${byTheNumbers}
 - If subheadings are provided, render each as <h3 style="font-size:1.15em;font-weight:700;margin:22px 0 8px;color:#1e293b;">[subheading]</h3> followed by 1–2 <p> blocks.`;
+    }
   }
 }
 
@@ -153,95 +164,100 @@ function getLangRule(language: string): string {
 
 // ---------------------------------------------------------------------------
 // Lead summary — first section only
-// SORUN 1+2+3 FIX:
-//   - <details> kaldırıldı — TipTap desteklemiyor, tüm içerik tek <li>'ya giriyordu
-//   - "What this article covers" düz <ul> olarak render ediliyor
-//   - Rakip analizi sonrası "Key Takeaways" tarzı tasarım — başlık + bullet + bottom line
-//   - Tüm HTML TipTap-safe: sadece block-level elementler, no <details>/<summary>
+// SORUN 1 FIX (final): Claude artık HTML üretmiyor — sadece 4 kısa metin
+// parçası üretiyor (hook + 3-4 bullet + bottom line). Bu metinler statik
+// HTML şablonuna TypeScript tarafında enjekte ediliyor.
+// Böylece tag kapanma hatası imkansız hale geliyor.
 // ---------------------------------------------------------------------------
 async function generateLeadSummary(
   keyword: string, articleTitle: string, sections: string[], language: string
 ): Promise<string> {
   const isTr = language.toLowerCase().includes("tr");
-  const langRule = isTr
-    ? "Akıcı, doğal Türkçe. Kısa ve net. Her madde max 12 kelime."
-    : "Crisp American English. Direct, no fluff. Each bullet under 14 words.";
 
   const sectionCount = sections.length;
   const estWords     = sectionCount * 250;
   const readingMins  = Math.max(3, Math.round(estWords / 238));
   const readingLabel = isTr ? `${readingMins} dakika okuma` : `${readingMins} min read`;
-
-  // Article map — rendered as plain <ul>, NOT <details> (TipTap-safe)
-  const mapItems = sections
-    .slice(0, 6)
-    .map((s) => `<li style="color:#374151;margin:0 0 4px;font-size:0.88em;line-height:1.5;">${s}</li>`)
-    .join("\n");
-
-  const coverLabel   = isTr ? "Bu makalede neler var:" : "What this article covers:";
-  const bottomLabel  = isTr ? "Ana sonuç:" : "Key takeaway:";
   const sectionLabel = isTr ? "✦ Temel Çıkarımlar" : "✦ Key Takeaways";
+  const coverLabel   = isTr ? "Bu makalede:" : "In this article:";
+  const bottomLabel  = isTr ? "Ana sonuç:" : "Key takeaway:";
 
+  // Claude sadece JSON üretiyor — HTML yok, tag yok
   const res = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 700, temperature: 0.4,
+    model: "claude-sonnet-4-6", max_tokens: 400, temperature: 0.4,
     messages: [{ role: "user", content:
-      `Write an HTML lead summary block for the article titled "${articleTitle}" about "${keyword}".
-${langRule}
+      `You are writing a lead summary for an article about "${keyword}".
+Sections: ${sections.slice(0, 8).join(" | ")}
+Language: ${language}
 
-Sections in this article: ${sections.slice(0, 8).join(" | ")}
+Return ONLY valid JSON. No markdown, no explanation, no code fences.
 
-Produce EXACTLY this HTML structure. Fill in ONLY the bracketed placeholders. Keep ALL inline styles exactly as shown. Do NOT add <details>, <summary>, or any interactive elements.
-
-<div style="background:linear-gradient(135deg,#eff6ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:12px;padding:24px 28px;margin:20px 0 32px;">
-
-  <p style="font-size:0.72em;font-weight:800;color:#6366f1;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 12px 0;">${sectionLabel} · ${readingLabel}</p>
-
-  <p style="font-size:1.08em;color:#1e293b;line-height:1.7;margin:0 0 16px 0;">
-    <strong style="color:#1d4ed8;">[ONE hook sentence with a concrete stat — max 22 words. Start with a number or surprising fact. Be specific to "${keyword}".]</strong>
-  </p>
-
-  <ul style="margin:0 0 20px 0;padding:0;list-style:none;">
-    <li style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
-      <span style="color:#6366f1;font-weight:700;font-size:1em;flex-shrink:0;">→</span>
-      <span style="color:#374151;font-size:0.95em;line-height:1.5;"><strong>[Key insight 1 — max 12 words. Data point or consequence.]</strong></span>
-    </li>
-    <li style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
-      <span style="color:#6366f1;font-weight:700;font-size:1em;flex-shrink:0;">→</span>
-      <span style="color:#374151;font-size:0.95em;line-height:1.5;"><strong>[Key insight 2 — max 12 words. Different angle from #1.]</strong></span>
-    </li>
-    <li style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
-      <span style="color:#6366f1;font-weight:700;font-size:1em;flex-shrink:0;">→</span>
-      <span style="color:#374151;font-size:0.95em;line-height:1.5;"><strong>[Key insight 3 — max 12 words. Actionable or surprising.]</strong></span>
-    </li>
-    <li style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
-      <span style="color:#6366f1;font-weight:700;font-size:1em;flex-shrink:0;">→</span>
-      <span style="color:#374151;font-size:0.95em;line-height:1.5;"><strong>[Key insight 4 — max 12 words. Only if genuinely distinct from above.]</strong></span>
-    </li>
-  </ul>
-
-  <div style="margin-bottom:18px;">
-    <p style="font-size:0.78em;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 8px 0;">${coverLabel}</p>
-    <ul style="margin:0;padding:0 0 0 4px;list-style:none;">
-${mapItems}
-    </ul>
-  </div>
-
-  <p style="margin:0;font-size:0.9em;color:#374151;border-top:1px solid #c7d2fe;padding-top:14px;line-height:1.6;">
-    <strong style="color:#1d4ed8;">${bottomLabel}</strong> [One sentence — the single most important takeaway. Max 20 words. Opinionated, no hedge words.]
-  </p>
-
-</div>
+{
+  "hook": "ONE sentence starting with a number or surprising fact. Include %, $, or multiplier. Max 22 words. Specific to '${keyword}'.",
+  "bullets": [
+    "Key insight 1 — max 10 words. Data point or consequence.",
+    "Key insight 2 — max 10 words. Different angle from #1.",
+    "Key insight 3 — max 10 words. Actionable or surprising."
+  ],
+  "bottomLine": "ONE opinionated sentence. The single most important takeaway. Max 18 words. No hedge words."
+}
 
 RULES:
-- 3 bullets minimum, 4 maximum. Omit bullet 4 if it repeats bullets 1-3.
-- Each bullet must cover a DIFFERENT angle (data, cost, time, risk, adoption).
-- Hook stat must include a %, $, or multiplier — be specific.
-- Bottom line must be opinionated — not a restatement of the hook.
-- Do NOT use <details>, <summary>, or interactive HTML elements.
-- Do NOT add anything outside the outer <div>. Return ONLY the raw HTML.` }],
+- bullets: 3 items minimum, 4 maximum. Each must cover a DIFFERENT angle.
+- hook must include a real number, %, or multiplier.
+- bottomLine must NOT restate the hook.
+- All text in ${language}.` }],
   });
+
   const block = res.content.find((b): b is Anthropic.TextBlock => b.type === "text");
-  return (block?.text || "").replace(/^```html\s*/i, "").replace(/```\s*$/i, "").trim();
+  const rawText = (block?.text || "").replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+
+  let hook = "";
+  let bullets: string[] = [];
+  let bottomLine = "";
+
+  try {
+    const parsed = JSON.parse(rawText);
+    hook       = parsed.hook || "";
+    bullets    = Array.isArray(parsed.bullets) ? parsed.bullets.slice(0, 4) : [];
+    bottomLine = parsed.bottomLine || "";
+  } catch {
+    // Fallback: return minimal summary if JSON parse fails
+    console.warn("[LEAD_SUMMARY] JSON parse failed — using fallback");
+    hook = `${keyword} is shaping how businesses operate in measurable ways.`;
+    bullets = ["Understanding this topic gives you a measurable advantage.", "Most teams overlook the key factors covered here."];
+    bottomLine = "The frameworks in this article are ready to apply immediately.";
+  }
+
+  // Article map — rendered as plain <li> list (TipTap-safe, no <details>)
+  const mapItems = sections
+    .slice(0, 6)
+    .map((s) => `<li style="color:#374151;margin:0 0 4px 0;font-size:0.87em;line-height:1.5;list-style:none;padding-left:0;">${s}</li>`)
+    .join("\n      ");
+
+  // Bullet items — assembled in TypeScript, no Claude HTML generation
+  const bulletItems = bullets
+    .map((b) => `<li style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;list-style:none;">
+        <span style="color:#6366f1;font-weight:700;font-size:1em;flex-shrink:0;line-height:1.5;">→</span>
+        <span style="color:#374151;font-size:0.95em;line-height:1.5;"><strong>${b}</strong></span>
+      </li>`)
+    .join("\n      ");
+
+  // Full HTML assembled in TypeScript — no Claude-generated tags
+  return `<div style="background:linear-gradient(135deg,#eff6ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:12px;padding:24px 28px;margin:20px 0 32px;">
+  <p style="font-size:0.72em;font-weight:800;color:#6366f1;text-transform:uppercase;letter-spacing:0.1em;margin:0 0 12px 0;">${sectionLabel} · ${readingLabel}</p>
+  <p style="font-size:1.08em;color:#1e293b;line-height:1.7;margin:0 0 16px 0;"><strong style="color:#1d4ed8;">${hook}</strong></p>
+  <ul style="margin:0 0 20px 0;padding:0;">
+      ${bulletItems}
+  </ul>
+  <div style="margin-bottom:16px;">
+    <p style="font-size:0.78em;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 8px 0;">${coverLabel}</p>
+    <ul style="margin:0;padding:0;">
+      ${mapItems}
+    </ul>
+  </div>
+  <p style="margin:0;font-size:0.9em;color:#374151;border-top:1px solid #c7d2fe;padding-top:14px;line-height:1.6;"><strong style="color:#1d4ed8;">${bottomLabel}</strong> ${bottomLine}</p>
+</div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,9 +419,7 @@ RIGHT: "Most teams lose 30% of production time to format inconsistency — ${bra
 Brand facts: ${brandDesc ? brandDesc.slice(0, 150) : ""} ${brandFeatures ? `| Key features: ${brandFeatures.slice(0, 150)}` : ""}`
       : "";
 
-    // ── Sub-headings (SORUN 4 FIX) ─────────────────────────────────────────
-    // H3'ler artık format instruction içinde de zorunlu kılınıyor.
-    // subHeadingInstruction format talimatını TAMAMLAR, ezmez.
+    // ── Sub-headings ──────────────────────────────────────────────────
     const subHeadingInstruction = subHeadings.length > 0
       ? `[SUB-SECTIONS — MANDATORY H3 RENDERING]:
 You MUST render each sub-section below as a proper <h3> heading followed by content:
@@ -418,7 +432,7 @@ For each sub-section:
 DO NOT collapse sub-sections into a single paragraph. Each MUST have its own <h3>.`
       : "";
 
-    // ── Narrative + quality instructions ─────────────────────────────────
+    // ── Narrative + quality instructions ─────────────────────────────
     const narrativeInstruction = [
       uniqueAngle ? `[REQUIRED CONTENT ANGLE — NON-NEGOTIABLE]:
 "${uniqueAngle}"
@@ -428,11 +442,15 @@ This angle MUST be reflected in this section if it is the intro, the section mos
 ${storySpine}
 Your section advances this arc. Do NOT restart from the beginning — assume the reader has read everything before this.` : "",
 
+      // SORUN 4 FIX: Bridge instruction güncellendi — başlık tekrarını açıkça yasakla
       prevSectionSummary ? `[BRIDGE FROM PREVIOUS SECTION — MANDATORY]:
 The previous section ended with this context: "${prevSectionSummary}"
 Your OPENING SENTENCE must logically continue from this — not start a new topic from scratch.
-DO NOT use: "In this section...", "Now let's look at...", "Another important..."
-INSTEAD: Open with an insight or consequence that flows naturally from what was just established.` : "",
+STRICT RULES:
+- Do NOT repeat or restate the section title (not even in italic or bold).
+- Do NOT use: "In this section...", "Now let's look at...", "Another important...", "${sectionPlan.title}..."
+- Do NOT open with the section title as an italic or emphasized phrase.
+- INSTEAD: Open directly with an insight, fact, or consequence that flows from the previous section.` : "",
 
       nextTitle ? `[CLOSING HOOK — MANDATORY]:
 End this section with ONE sentence that makes the reader need what comes next: "${nextTitle}"
@@ -457,7 +475,7 @@ Do NOT write: "In the next section we will..." — instead, end with an insight 
 
     ].filter(Boolean).join("\n\n");
 
-    // ── System prompt ─────────────────────────────────────────────────────
+    // ── System prompt ─────────────────────────────────────────────────
     const systemPrompt = `You are a concise, data-driven WordPress SEO content writer.
 SECTION: "${sectionPlan.title}"
 KEYWORD: "${keyword}"
@@ -467,13 +485,13 @@ ${getLangRule(language)}
 1. RAW HTML ONLY — No Markdown.
 2. NO <h2> — System adds the heading.
 3. BREVITY — Each <p>: MAX ${Math.min(sectionPlan.maxParagraphSentences || 2, 2)} sentences, max 20 words each.
-4. NO REPETITION — Don't restate the section title in sentence 1.
+4. NO REPETITION — Don't restate the section title in sentence 1. Never open with the title in italic or bold.
 5. REAL DATA — At least one specific number, %, or $.
 6. INLINE STYLES ONLY — All style="" with double quotes.
 7. RICH FORMAT — Use the format instruction below. Tables, bullets, blockquotes, and H3s make content scannable and valuable. DO NOT flatten everything into paragraphs.
 ═══════════════════════════════
 
-${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParagraphSentences || 2, 2))}
+${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParagraphSentences || 2, 2), sectionIndex)}
 
 ${subHeadingInstruction}
 
@@ -487,7 +505,7 @@ ${narrativeInstruction}
 
 Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
-    // Token budget: numbered headings get more room; subheadings also need more
+    // Token budget: numbered headings and subheadings need more room
     const hasSubHeadings = subHeadings.length > 0;
     const sectionMaxTokens = (promisedCount && promisedCount >= 4) || hasSubHeadings ? 3200 : 2000;
 
@@ -501,7 +519,7 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    // ── Image — 1-4-7 rule + async decoupling ─────────────────────────────
+    // ── Image — 1-4-7 rule + async decoupling ─────────────────────────
     const shouldGenerateImage = sectionIndex % 3 === 0;
     const imagePrompt = shouldGenerateImage
       ? `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100)
@@ -516,14 +534,14 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 <!-- /wp:image -->`
       : "";
 
-    // ── Lead summary (section 0 only) ─────────────────────────────────────
+    // ── Lead summary (section 0 only) ─────────────────────────────────
     let leadSummaryHtml = "";
     if (isFirstSection && (allSectionTitles?.length ?? 0) > 0) {
       try { leadSummaryHtml = await generateLeadSummary(keyword, articleTitle, allSectionTitles, language); }
       catch { /* non-critical */ }
     }
 
-    // ── Context chain summary ─────────────────────────────────────────────
+    // ── Context chain summary ─────────────────────────────────────────
     let sectionSummary = "";
     try {
       const summaryRes = await anthropic.messages.create({
@@ -543,7 +561,7 @@ Output ONLY the 2-sentence summary. No labels, no quotes.`,
       sectionSummary = summaryBlock?.text?.trim() || "";
     } catch { /* non-critical */ }
 
-    // ── Heading number sync ───────────────────────────────────────────────
+    // ── Heading number sync ───────────────────────────────────────────
     let finalTitle = sectionPlan.title;
     if (promisedCount) {
       const liCount = (generatedHtml.match(/<li[\s>]/gi) || []).length;
@@ -554,7 +572,7 @@ Output ONLY the 2-sentence summary. No labels, no quotes.`,
       }
     }
 
-    // ── Assemble ──────────────────────────────────────────────────────────
+    // ── Assemble ──────────────────────────────────────────────────────
     const h2 = `<h2 style="font-size:1.6em;font-weight:700;margin:36px 0 18px;padding-bottom:8px;border-bottom:2px solid #e0e7ff;color:#1e293b;">${finalTitle}</h2>`;
     const finalChunk = isFirstSection
       ? `\n${leadSummaryHtml}\n${h2}\n${imgHtml}\n${generatedHtml}`
