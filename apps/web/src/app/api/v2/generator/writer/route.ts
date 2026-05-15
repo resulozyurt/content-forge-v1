@@ -466,27 +466,26 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    // ── Image — 1-4-7 rule (every 3rd H2 only) ───────────────────────────
-    // FIX 0: Images placed at sectionIndex 0, 3, 6, 9... (i.e. % 3 === 0).
-    // A 7-H2 article gets max 3 images. Saves ~60s generation time per article.
-    // Image prompt built inline — no separate Claude call needed.
+    // ── Image — 1-4-7 rule + async decoupling (FIX 0 + FIX 4) ─────────────
+    // Images only at sectionIndex 0, 3, 6, 9... (every 3rd H2).
+    // FIX 4: Gemini is NO LONGER called here. Writer returns immediately with
+    // an HTML placeholder <figure data-img-placeholder="N"> so the UI can
+    // render the section at once. The engine fires image-generate in parallel
+    // and swaps the placeholder after all sections complete.
     const shouldGenerateImage = sectionIndex % 3 === 0;
-    let imgHtml = "";
-    if (shouldGenerateImage) {
-      try {
-        const imgPrompt = `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100);
-        const imageDataUri = await generateImageWithGemini(imgPrompt);
-        const imgSrc = imageDataUri
-          ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;
+    const imagePrompt = shouldGenerateImage
+      ? `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100)
+      : null;
 
-        imgHtml = `<!-- wp:image {"sizeSlug":"large"} -->
-<figure style="margin:28px 0;text-align:center;">
-  <img src="${imgSrc}" alt="${sectionPlan.title.replace(/"/g, "&quot;")}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" />
+    // Placeholder figure — engine swaps src once image resolves
+    const imgHtml = shouldGenerateImage
+      ? `<!-- wp:image {"sizeSlug":"large"} -->
+<figure data-img-placeholder="${sectionIndex}" style="margin:28px 0;text-align:center;">
+  <img src="https://placehold.co/1200x630/e0e7ff/6366f1?text=Generating+image..." alt="${sectionPlan.title.replace(/"/g, "&quot;")}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);opacity:0.5;" loading="lazy" width="1200" height="630" />
   <figcaption style="text-align:center;font-size:0.82em;color:#6b7280;font-style:italic;margin-top:6px;">${sectionPlan.title}</figcaption>
 </figure>
-<!-- /wp:image -->`;
-      } catch { /* image failure must never block content delivery */ }
-    }
+<!-- /wp:image -->`
+      : "";
 
     // ── Lead summary (section 0 only) ─────────────────────────────────────
     let leadSummaryHtml = "";
@@ -539,7 +538,7 @@ Output ONLY the 2-sentence summary. No labels, no quotes.`,
       ? `\n${leadSummaryHtml}\n${h2}\n${imgHtml}\n${generatedHtml}`
       : `${h2}\n${imgHtml}\n${generatedHtml}`;
 
-    return NextResponse.json({ chunk: finalChunk, sectionSummary }, { status: 200 });
+    return NextResponse.json({ chunk: finalChunk, sectionSummary, imagePrompt, sectionIndex }, { status: 200 });
   } catch (error) {
     console.error("[WRITER_AGENT_ERROR]", error);
     return NextResponse.json({ error: "Writing failed." }, { status: 500 });

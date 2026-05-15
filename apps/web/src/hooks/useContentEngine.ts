@@ -95,6 +95,17 @@ export function useContentEngine() {
       // Track per-section summaries for context chaining (P1 — bridge sentences)
       const sectionSummaries: string[] = [];
 
+      // FIX 4: Image promises fired in parallel with section writing.
+      // Each entry: { promise: Promise<ImageResult>, sectionIndex: number }
+      // We collect them all and swap placeholders after the section loop.
+      interface ImageResult {
+        imageDataUri: string | null;
+        sectionIndex: number;
+        sectionTitle: string;
+        fallbackSrc: string;
+      }
+      const imagePromises: Array<Promise<ImageResult>> = [];
+
       // H1
       const h1Html = `<h1 style="font-size:2.2em;font-weight:800;line-height:1.3;margin:0 0 32px;color:#0f172a;">${articleTitle}</h1>\n\n`;
       setGeneratedContent(h1Html);
@@ -140,7 +151,29 @@ export function useContentEngine() {
           console.warn(`[ENGINE] Writer failed section ${i}: "${section.title}" — skipping`);
           continue;
         }
-        const { chunk: draftChunk, sectionSummary: newSummary } = await writerRes.json();
+        const {
+          chunk: draftChunk,
+          sectionSummary: newSummary,
+          imagePrompt,
+          sectionIndex: writerSectionIndex,
+        } = await writerRes.json();
+
+        // FIX 4: Fire image generation immediately after writer returns —
+        // do NOT await. The image resolves while the next section is being written.
+        if (imagePrompt) {
+          const imgPromise: Promise<ImageResult> = fetch("/api/v2/generator/image-generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: imagePrompt,
+              sectionIndex: i,
+              sectionTitle: section.title,
+            }),
+          })
+            .then((r) => r.ok ? r.json() : Promise.resolve({ imageDataUri: null, sectionIndex: i, sectionTitle: section.title, fallbackSrc: "" }))
+            .catch(() => ({ imageDataUri: null, sectionIndex: i, sectionTitle: section.title, fallbackSrc: "" }));
+          imagePromises.push(imgPromise);
+        }
 
         // Store the summary for the next section's context chaining
         if (newSummary) {
@@ -168,6 +201,50 @@ export function useContentEngine() {
 
         fullHtml += finalChunk + "\n\n";
         setGeneratedContent(fullHtml);
+      }
+
+      // ── PHASE 3.5: RESOLVE IMAGES + SWAP PLACEHOLDERS ────────────────────
+      // All section content is already in the UI. Now we wait for image promises
+      // (which were fired in parallel during writing) and swap the placeholders.
+      // Even if some fail, content is unaffected — placeholders stay as fallbacks.
+      if ((imagePromises.length ?? 0) > 0) {
+        try {
+          const imageResults = await Promise.allSettled(imagePromises);
+          let swappedHtml = fullHtml;
+
+          for (const result of imageResults) {
+            if (result.status !== "fulfilled") continue;
+            const { imageDataUri, sectionIndex: imgIdx, sectionTitle, fallbackSrc } = result.value;
+
+            const finalSrc = imageDataUri ?? fallbackSrc;
+            if (!finalSrc) continue;
+
+            // Replace the placeholder figure for this sectionIndex
+            // Pattern: <figure data-img-placeholder="N" ...>...<img src="...placeholder..." .../>...</figure>
+            const placeholderRegex = new RegExp(
+              `(<figure data-img-placeholder="${imgIdx}"[^>]*>[\\s\\S]*?<img)[^>]*?(\\/>)`,
+              "i"
+            );
+            const altText = (sectionTitle || "").replace(/"/g, "&quot;");
+            swappedHtml = swappedHtml.replace(
+              placeholderRegex,
+              `$1 src="${finalSrc}" alt="${altText}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" $2`
+            );
+
+            // Also remove the placeholder opacity from the figure wrapper
+            swappedHtml = swappedHtml.replace(
+              new RegExp(`(data-img-placeholder="${imgIdx}"[^>]*style=")[^"]*(")`),
+              `$1margin:28px 0;text-align:center;$2`
+            );
+
+            console.log(`[ENGINE] Image swapped for section ${imgIdx}: ${imageDataUri ? "real" : "fallback"}`);
+          }
+
+          fullHtml = swappedHtml;
+          setGeneratedContent(swappedHtml);
+        } catch (e) {
+          console.warn("[ENGINE] Image swap error — content unaffected", e);
+        }
       }
 
       // ── PHASE 5: SEO METADATA ─────────────────────────────────────────────
