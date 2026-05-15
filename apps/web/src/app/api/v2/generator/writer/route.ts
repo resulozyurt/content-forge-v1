@@ -203,29 +203,49 @@ export async function POST(req: NextRequest) {
     const numberedHeadingMatch = sectionPlan.title.match(/(\d+)\s+(myth|step|way|strateg|tip|reason|sign|mistake|lesson|factor|tool|question|example|benefit|advantage)/i);
     const promisedCount: number | null = numberedHeadingMatch ? parseInt(numberedHeadingMatch[1], 10) : null;
 
-    // ── Internal link — semantic scoring + guaranteed uniqueness ──────────
+    // ── Internal link — topic-aware semantic scoring + guaranteed uniqueness ──
+    // FIX 1: rawInternalLinks supports both string[] (legacy) and {url,topic}[]
+    // (enriched). topic string is added to the scoring haystack so links are
+    // matched to section meaning, not just URL path tokens.
+    // score === 0 → no link injected; writer gets a placeholder instruction instead.
     const stopWords = new Set([
       "with","that","this","from","have","will","your","their","which","about",
       "into","more","also","such","each","than","when","were","been","they",
       "what","where","some","these","those","both","after","being","there",
       "through","during","before","between","should","could","would",
     ]);
-    const allInternalLinks: string[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
+
+    // Normalise: accept string[] (legacy) or {url,topic?}[] (enriched)
+    type RawLink = string | { url: string; topic?: string };
+    const rawInternalLinks: RawLink[] = researchBlueprint.extractedContext?.availableInternalLinks || [];
+    const normalizedLinks = rawInternalLinks.map((item) =>
+      typeof item === "string"
+        ? { url: item, topic: "" }
+        : { url: item.url ?? "", topic: item.topic ?? "" }
+    ).filter((l) => (l.url?.length ?? 0) > 0);
+
     let linkInstruction = "";
     const internalLinkSlot = Math.floor(sectionIndex / 2);
     const maxInternalLinks = 5;
 
-    if (allInternalLinks.length > 0 && internalLinkSlot < maxInternalLinks) {
+    if ((normalizedLinks.length ?? 0) > 0 && internalLinkSlot < maxInternalLinks) {
       const queryTerms = `${sectionPlan.title} ${keyword}`
         .toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
         .filter((w) => w.length > 3 && !stopWords.has(w));
 
-      const scoredLinks = allInternalLinks.map((url) => {
+      const scoredLinks = normalizedLinks.map(({ url, topic }) => {
         try {
           const urlObj = new URL(url);
-          const path = (urlObj.pathname + " " + urlObj.hostname).toLowerCase().replace(/[-_/]/g, " ");
+          // Haystack = URL path tokens + hostname + enriched topic string
+          const haystack = (
+            urlObj.pathname + " " + urlObj.hostname + " " + topic
+          ).toLowerCase().replace(/[-_/]/g, " ");
           const score = queryTerms.reduce(
-            (acc, term) => acc + (path.includes(term) ? 2 : 0) + (url.toLowerCase().includes(term) ? 1 : 0), 0
+            (acc, term) =>
+              acc +
+              (haystack.includes(term) ? 2 : 0) +
+              (url.toLowerCase().includes(term) ? 1 : 0),
+            0
           );
           return { url, score };
         } catch { return { url, score: 0 }; }
@@ -235,11 +255,15 @@ export async function POST(req: NextRequest) {
 
       // Prime-number offset guarantees a different URL per section slot
       const pickIndex = (internalLinkSlot * 7) % scoredLinks.length;
-      const link = scoredLinks[pickIndex].url;
-      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${scoredLinks[pickIndex].score} → ${link}`);
+      const picked = scoredLinks[pickIndex];
+      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} → ${picked.url}`);
 
-      linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a short inline anchor inside a sentence:
-<a href="${link}" style="color:#2563eb;text-decoration:underline;">[3–5 word anchor text]</a>
+      if (picked.score === 0) {
+        // No relevant link found — instruct writer to use contextual anchor only
+        linkInstruction = `[INTERNAL LINK]: No highly relevant internal URL was matched to this section. Do NOT force an irrelevant link. Instead, write a natural sentence that could serve as an internal link anchor in the future — wrap the 3–5 word noun phrase in: <a href="#" style="color:#2563eb;text-decoration:underline;">[anchor text]</a> as a placeholder.\n\n`;
+      } else {
+        linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a short inline anchor inside a sentence:
+<a href="${picked.url}" style="color:#2563eb;text-decoration:underline;">[3–5 word anchor text]</a>
 CRITICAL RULES:
 - The <a> tag must wrap ONLY 3–5 words — NEVER an entire sentence, paragraph, or <li> element.
 - Correct: "...which is why <a href="...">retail execution tools</a> matter..."
@@ -247,6 +271,7 @@ CRITICAL RULES:
 - Anchor text must be a natural noun phrase describing the destination page.
 
 `;
+      }
     }
 
     // ── Citations from pre-fetched pool — zero additional API calls ─────
@@ -394,23 +419,27 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    // ── Image — every section ─────────────────────────────────────────────
+    // ── Image — 1-4-7 rule (every 3rd H2 only) ───────────────────────────
+    // FIX 0: Images placed at sectionIndex 0, 3, 6, 9... (i.e. % 3 === 0).
+    // A 7-H2 article gets max 3 images. Saves ~60s generation time per article.
     // Image prompt built inline — no separate Claude call needed.
-    // Saves 1 Claude API call per section (~8 calls = ~$0.05/article).
+    const shouldGenerateImage = sectionIndex % 3 === 0;
     let imgHtml = "";
-    try {
-      const imgPrompt = `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100);
-      const imageDataUri = await generateImageWithGemini(imgPrompt);
-      const imgSrc = imageDataUri
-        ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;
+    if (shouldGenerateImage) {
+      try {
+        const imgPrompt = `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100);
+        const imageDataUri = await generateImageWithGemini(imgPrompt);
+        const imgSrc = imageDataUri
+          ?? `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(imgPrompt.slice(0, 60))}`;
 
-      imgHtml = `<!-- wp:image {"sizeSlug":"large"} -->
+        imgHtml = `<!-- wp:image {"sizeSlug":"large"} -->
 <figure style="margin:28px 0;text-align:center;">
   <img src="${imgSrc}" alt="${sectionPlan.title.replace(/"/g, "&quot;")}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" />
   <figcaption style="text-align:center;font-size:0.82em;color:#6b7280;font-style:italic;margin-top:6px;">${sectionPlan.title}</figcaption>
 </figure>
 <!-- /wp:image -->`;
-    } catch { /* image failure must never block content delivery */ }
+      } catch { /* image failure must never block content delivery */ }
+    }
 
     // ── Lead summary (section 0 only) ─────────────────────────────────────
     let leadSummaryHtml = "";
