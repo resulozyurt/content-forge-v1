@@ -231,14 +231,17 @@ export async function POST(req: NextRequest) {
     const prevSectionSummary: string|null = sectionPlan.prevSectionSummary || null;
 
     // Detect if heading promises a numbered list (e.g. "5 Myths", "7 Steps")
-    const numberedHeadingMatch = sectionPlan.title.match(/(\d+)\s+(myth|step|way|strateg|tip|reason|sign|mistake|lesson|factor|tool|question|example|benefit|advantage)/i);
+    const numberedHeadingMatch = sectionPlan.title.match(/(\d+)\s+(myth|step|way|strateg|tip|reason|sign|mistake|lesson|factor|tool|question|example|benefit|advantage)/i);
     const promisedCount: number | null = numberedHeadingMatch ? parseInt(numberedHeadingMatch[1], 10) : null;
 
-    // ── Internal link — topic-aware semantic scoring + guaranteed uniqueness ──
-    // FIX 1: rawInternalLinks supports both string[] (legacy) and {url,topic}[]
-    // (enriched). topic string is added to the scoring haystack so links are
-    // matched to section meaning, not just URL path tokens.
-    // score === 0 → no link injected; writer gets a placeholder instruction instead.
+    // ── Internal link — topic-aware semantic scoring (FIX 1 + FIX 5) ─────────
+    // BUG FIX: The previous prime-number offset (internalLinkSlot * 7) was
+    // selecting low-scored URLs after sort. New logic:
+    //   1. Score all links against section title + keyword
+    //   2. Filter to score > 0 candidates only
+    //   3. Among candidates, pick by slot index (round-robin diversity)
+    //   4. If zero candidates → placeholder href="#"
+    // Also: relative URLs are now safely handled via URL constructor fallback.
     const stopWords = new Set([
       "with","that","this","from","have","will","your","their","which","about",
       "into","more","also","such","each","than","when","were","been","they",
@@ -266,7 +269,9 @@ export async function POST(req: NextRequest) {
 
       const scoredLinks = normalizedLinks.map(({ url, topic }) => {
         try {
-          const urlObj = new URL(url);
+          // FIX: Use "https://x.com" as base so relative paths like /blog/foo
+          // don't throw — absolute URLs ignore the base entirely.
+          const urlObj = new URL(url, "https://placeholder-base.com");
           // Haystack = URL path tokens + hostname + enriched topic string
           const haystack = (
             urlObj.pathname + " " + urlObj.hostname + " " + topic
@@ -282,17 +287,24 @@ export async function POST(req: NextRequest) {
         } catch { return { url, score: 0 }; }
       });
 
+      // Sort descending by score, then ascending by URL length (prefer shorter/canonical)
       scoredLinks.sort((a, b) => b.score - a.score || a.url.length - b.url.length);
 
-      // Prime-number offset guarantees a different URL per section slot
-      const pickIndex = (internalLinkSlot * 7) % scoredLinks.length;
-      const picked = scoredLinks[pickIndex];
-      console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} → ${picked.url}`);
+      // FIX: Only pick from candidates with score > 0.
+      // Round-robin by slot among relevant candidates ensures diversity
+      // without accidentally selecting a zero-score (irrelevant) URL.
+      const relevantLinks = scoredLinks.filter((l) => l.score > 0);
 
-      if (picked.score === 0) {
-        // No relevant link found — instruct writer to use contextual anchor only
+      if ((relevantLinks.length ?? 0) === 0) {
+        // No semantically relevant URL found — use placeholder
+        console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} → no relevant match, using placeholder`);
         linkInstruction = `[INTERNAL LINK]: No highly relevant internal URL was matched to this section. Do NOT force an irrelevant link. Instead, write a natural sentence that could serve as an internal link anchor in the future — wrap the 3–5 word noun phrase in: <a href="#" style="color:#2563eb;text-decoration:underline;">[anchor text]</a> as a placeholder.\n\n`;
       } else {
+        // Round-robin among relevant candidates for diversity across sections
+        const pickIndex = internalLinkSlot % relevantLinks.length;
+        const picked = relevantLinks[pickIndex];
+        console.log(`[INTERNAL_LINK] slot:${internalLinkSlot} score:${picked.score} candidates:${relevantLinks.length} → ${picked.url}`);
+
         linkInstruction = `[INTERNAL LINK — MANDATORY]: Embed this URL ONCE as a short inline anchor inside a sentence:
 <a href="${picked.url}" style="color:#2563eb;text-decoration:underline;">[3–5 word anchor text]</a>
 CRITICAL RULES:
@@ -489,7 +501,7 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
     // ── Lead summary (section 0 only) ─────────────────────────────────────
     let leadSummaryHtml = "";
-    if (isFirstSection && allSectionTitles?.length > 0) {
+    if (isFirstSection && (allSectionTitles?.length ?? 0) > 0) {
       try { leadSummaryHtml = await generateLeadSummary(keyword, articleTitle, allSectionTitles, language); }
       catch { /* non-critical */ }
     }
@@ -525,7 +537,7 @@ Output ONLY the 2-sentence summary. No labels, no quotes.`,
       const deliveredCount = liCount > 0 ? liCount : promisedCount;
       if (deliveredCount < promisedCount && deliveredCount > 0) {
         finalTitle = sectionPlan.title.replace(
-          /\d+/,
+          /\d+/,
           String(deliveredCount)
         );
         console.log(`[HEADING_SYNC] "${sectionPlan.title}" → "${finalTitle}" (delivered ${deliveredCount}/${promisedCount})`);
