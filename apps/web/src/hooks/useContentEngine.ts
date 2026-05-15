@@ -28,6 +28,113 @@ interface GenerationParams {
   gaps?: string[];
 }
 
+// ---------------------------------------------------------------------------
+// BUG 3 FIX: swapImagePlaceholder
+// ---------------------------------------------------------------------------
+// Previous approach used a multi-capture regex with [\s\S]*? lazy match.
+// That broke in 3 ways:
+//   1. style="...rgba(0,0,0,0.08)..." inside attributes confused [^>]* matching
+//   2. Lazy [\s\S]*? was cut short by </figure> appearing after <figcaption>
+//   3. Second replace (opacity removal) had wrong attribute order assumption
+//
+// New approach: string.indexOf() to locate the exact figure block by its
+// data-img-placeholder="N" marker, then surgically replace only the <img>
+// tag inside it. No regex on the outer figure — just find/slice/reassemble.
+// ---------------------------------------------------------------------------
+function swapImagePlaceholder(
+  html: string,
+  sectionIndex: number,
+  finalSrc: string,
+  altText: string
+): string {
+  const marker = `data-img-placeholder="${sectionIndex}"`;
+  const figureStart = html.indexOf(`<figure ${marker}`);
+  // Also try with style before data attr (attribute order may vary)
+  const figureStartAlt = html.indexOf(`<figure `, html.indexOf(marker) - 200 < 0 ? 0 : html.indexOf(marker) - 200);
+
+  // Find the figure opening tag that contains our marker
+  let blockStart = -1;
+  let searchFrom = 0;
+  while (searchFrom < html.length) {
+    const candidate = html.indexOf("<figure ", searchFrom);
+    if (candidate === -1) break;
+    // Check if this figure tag contains our marker (within the tag itself, before first >)
+    const tagEnd = html.indexOf(">", candidate);
+    if (tagEnd === -1) break;
+    const tagContent = html.slice(candidate, tagEnd + 1);
+    if (tagContent.includes(marker)) {
+      blockStart = candidate;
+      break;
+    }
+    searchFrom = candidate + 1;
+  }
+
+  if (blockStart === -1) {
+    console.warn(`[IMAGE_SWAP] Placeholder not found for sectionIndex=${sectionIndex}`);
+    return html;
+  }
+
+  // Find the matching </figure> — handle nested figures if any by counting depth
+  let depth = 0;
+  let blockEnd = -1;
+  let pos = blockStart;
+  while (pos < html.length) {
+    const openIdx = html.indexOf("<figure", pos);
+    const closeIdx = html.indexOf("</figure>", pos);
+
+    if (closeIdx === -1) break;
+
+    if (openIdx !== -1 && openIdx < closeIdx) {
+      depth++;
+      pos = openIdx + 1;
+    } else {
+      depth--;
+      if (depth === 0) {
+        blockEnd = closeIdx + "</figure>".length;
+        break;
+      }
+      pos = closeIdx + 1;
+    }
+  }
+
+  if (blockEnd === -1) {
+    console.warn(`[IMAGE_SWAP] </figure> not found for sectionIndex=${sectionIndex}`);
+    return html;
+  }
+
+  // Extract the figure block
+  const figureBlock = html.slice(blockStart, blockEnd);
+
+  // Find <img inside the figure block
+  const imgStart = figureBlock.indexOf("<img ");
+  if (imgStart === -1) {
+    console.warn(`[IMAGE_SWAP] <img> not found inside figure for sectionIndex=${sectionIndex}`);
+    return html;
+  }
+
+  // Find the end of the img tag (self-closing />  or >)
+  let imgEnd = figureBlock.indexOf("/>", imgStart);
+  const imgEndSimple = figureBlock.indexOf(">", imgStart);
+  if (imgEnd === -1 || (imgEndSimple !== -1 && imgEndSimple < imgEnd)) {
+    imgEnd = imgEndSimple + 1;
+  } else {
+    imgEnd = imgEnd + 2; // include />
+  }
+
+  // Build replacement img tag — clean, no placeholder opacity
+  const newImg = `<img src="${finalSrc}" alt="${altText}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" />`;
+
+  // Build replacement figure — remove opacity:0.5 from wrapper style
+  const newFigureBlock = figureBlock
+    .slice(0, imgStart)
+    .replace(/opacity:[^;'"]+;?\s*/g, "") // remove opacity from figure style
+    + newImg
+    + figureBlock.slice(imgEnd);
+
+  // Reassemble full HTML
+  return html.slice(0, blockStart) + newFigureBlock + html.slice(blockEnd);
+}
+
 export function useContentEngine() {
   const [status, setStatus] = useState<EngineStatus>("IDLE");
   const [currentSectionName, setCurrentSectionName] = useState<string>("");
@@ -206,7 +313,8 @@ export function useContentEngine() {
       // ── PHASE 3.5: RESOLVE IMAGES + SWAP PLACEHOLDERS ────────────────────
       // All section content is already in the UI. Now we wait for image promises
       // (which were fired in parallel during writing) and swap the placeholders.
-      // Even if some fail, content is unaffected — placeholders stay as fallbacks.
+      // BUG 3 FIX: replaced fragile regex with swapImagePlaceholder() which uses
+      // indexOf + slice — immune to attribute order, nested tags, special chars.
       if ((imagePromises.length ?? 0) > 0) {
         try {
           const imageResults = await Promise.allSettled(imagePromises);
@@ -217,27 +325,14 @@ export function useContentEngine() {
             const { imageDataUri, sectionIndex: imgIdx, sectionTitle, fallbackSrc } = result.value;
 
             const finalSrc = imageDataUri ?? fallbackSrc;
-            if (!finalSrc) continue;
+            if (!finalSrc) {
+              console.warn(`[ENGINE] No image src for section ${imgIdx} — placeholder stays`);
+              continue;
+            }
 
-            // Replace the placeholder figure for this sectionIndex
-            // Pattern: <figure data-img-placeholder="N" ...>...<img src="...placeholder..." .../>...</figure>
-            const placeholderRegex = new RegExp(
-              `(<figure data-img-placeholder="${imgIdx}"[^>]*>[\\s\\S]*?<img)[^>]*?(\\/>)`,
-              "i"
-            );
             const altText = (sectionTitle || "").replace(/"/g, "&quot;");
-            swappedHtml = swappedHtml.replace(
-              placeholderRegex,
-              `$1 src="${finalSrc}" alt="${altText}" style="width:100%;height:auto;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.08);" loading="lazy" width="1200" height="630" $2`
-            );
-
-            // Also remove the placeholder opacity from the figure wrapper
-            swappedHtml = swappedHtml.replace(
-              new RegExp(`(data-img-placeholder="${imgIdx}"[^>]*style=")[^"]*(")`),
-              `$1margin:28px 0;text-align:center;$2`
-            );
-
-            console.log(`[ENGINE] Image swapped for section ${imgIdx}: ${imageDataUri ? "real" : "fallback"}`);
+            swappedHtml = swapImagePlaceholder(swappedHtml, imgIdx, finalSrc, altText);
+            console.log(`[ENGINE] Image swapped for section ${imgIdx}: ${imageDataUri ? "Gemini" : "fallback"}`);
           }
 
           fullHtml = swappedHtml;
