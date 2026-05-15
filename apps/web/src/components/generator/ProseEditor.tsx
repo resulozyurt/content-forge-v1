@@ -36,12 +36,14 @@ const PROSE_PURIFY_CONFIG = {
         "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
         "figure", "figcaption", "img",
         "a", "blockquote", "cite", "pre", "code", "span", "div",
+        "details", "summary",
     ],
     ALLOWED_ATTR: [
         "href", "src", "alt", "title", "target", "rel",
         "class", "id", "style",
         "width", "height", "loading",
         "colspan", "rowspan",
+        "data-img-placeholder",
     ],
     // Allow data: URIs so Gemini base64 images are not stripped
     ALLOW_DATA_URI_TAGS: ["img"],
@@ -112,6 +114,26 @@ function AccordionSection({
     );
 }
 
+// ---------------------------------------------------------------------------
+// stripBase64Images — clipboard'a gönderilmeden önce data: URI'larını kaldır.
+// BUG 2 FIX: Turndown base64 img src'yi olduğu gibi Markdown string'e basıyor
+// → ~300KB text clipboard'a yazılıyor → yapıştırınca saçma uzun içerik çıkıyor.
+// Çözüm: figure/img[src^="data:"] elemanlarını kaldır, wp:image comment'larını temizle.
+// ---------------------------------------------------------------------------
+function stripBase64ImagesFromHtml(html: string): string {
+    // Server-side safe: basit regex ile strip (DOM API yok)
+    return html
+        // wp:image comment'larını kaldır
+        .replace(/<!-- wp:image[^>]*-->[\s\S]*?<!-- \/wp:image -->/gi, "")
+        // data: URI içeren figure bloklarını kaldır
+        .replace(/<figure[^>]*>[\s\S]*?<img[^>]+src="data:[^"]*"[\s\S]*?<\/figure>/gi, "")
+        // Kalan tekil data: URI img taglarını kaldır
+        .replace(/<img[^>]+src="data:[^"]*"[^>]*\/?>/gi, "")
+        // Placeholder figure'ları kaldır (placehold.co)
+        .replace(/<figure[^>]*data-img-placeholder[^>]*>[\s\S]*?<\/figure>/gi, "")
+        .trim();
+}
+
 export default function ProseEditor({ blocks, outlineData, initialHtml, documentId }: ProseEditorProps) {
     const [hasSelection, setHasSelection] = useState(false);
     const [activeTab, setActiveTab] = useState<SidebarTab>('optimize');
@@ -119,6 +141,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [isAILoading, setIsAILoading] = useState<boolean>(false);
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
+    const [copyHtmlStatus, setCopyHtmlStatus] = useState<'idle' | 'copied'>('idle');
     const [currentHtml, setCurrentHtml] = useState<string>("");
     const hasSaved = useRef(false);
 
@@ -291,10 +314,17 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [seoMeta.metaTitle]);
 
+    // -----------------------------------------------------------------------
+    // BUG 2 FIX: base64 img src'leri Turndown'a vermeden önce strip et.
+    // Turndown, data: URI'yi olduğu gibi Markdown string'e basıyor → ~300KB
+    // clipboard. stripBase64ImagesFromHtml() bunu önler.
+    // -----------------------------------------------------------------------
     const handleExportMarkdown = async () => {
         if (!editor) return;
         try {
-            const html = editor.getHTML();
+            const rawHtml = editor.getHTML();
+            // Strip base64/placeholder images before converting to Markdown
+            const cleanHtml = stripBase64ImagesFromHtml(rawHtml);
             const turndownService = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
             // Tablo dönüşümü için turndown table eklentisi (basit fallback)
             turndownService.addRule('table', {
@@ -303,11 +333,31 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     return '\n\n' + (node as HTMLElement).outerHTML + '\n\n';
                 }
             });
-            const markdown = turndownService.turndown(html);
+            const markdown = turndownService.turndown(cleanHtml);
             await navigator.clipboard.writeText(markdown);
-            alert("Success: Document architecture copied to clipboard as Markdown.");
+            alert("Success: Document copied to clipboard as Markdown.");
         } catch (error) {
             console.error("[CLIPBOARD_ACCESS_FAULT]:", error);
+            alert("Clipboard access denied. Please verify your browser permissions.");
+        }
+    };
+
+    // -----------------------------------------------------------------------
+    // BUG 1 FIX: Copy HTML — editördeki tam HTML'i (h2/h3/table/figure dahil)
+    // olduğu gibi kopyalar. WordPress HTML editörüne yapıştırınca biçim korunur.
+    // Base64 görseller strip edilir (zaten WP'e upload edilmeleri gerekir).
+    // -----------------------------------------------------------------------
+    const handleCopyHtml = async () => {
+        if (!editor) return;
+        try {
+            const rawHtml = editor.getHTML();
+            // Strip base64/placeholder images — WP'e base64 göndermek anlamsız
+            const cleanHtml = stripBase64ImagesFromHtml(rawHtml);
+            await navigator.clipboard.writeText(cleanHtml);
+            setCopyHtmlStatus('copied');
+            setTimeout(() => setCopyHtmlStatus('idle'), 2500);
+        } catch (error) {
+            console.error("[CLIPBOARD_HTML_FAULT]:", error);
             alert("Clipboard access denied. Please verify your browser permissions.");
         }
     };
@@ -430,6 +480,23 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                         {isProofreading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyzing...</> : <><SpellCheck size={16} className="mr-2 text-indigo-500" /> Proofread</>}
                     </button>
 
+                    {/* BUG 1 FIX: Copy HTML — h2/h3/table/link dahil tam HTML kopyalar */}
+                    <button
+                        onClick={handleCopyHtml}
+                        className={cn(
+                            "inline-flex items-center px-4 py-2 border text-sm font-bold rounded-lg transition-colors",
+                            copyHtmlStatus === 'copied'
+                                ? "bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700 text-green-700 dark:text-green-400"
+                                : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                        )}
+                    >
+                        {copyHtmlStatus === 'copied'
+                            ? <><CheckCircle2 size={16} className="mr-2" /> Copied!</>
+                            : <><Copy size={16} className="mr-2" /> Copy HTML</>
+                        }
+                    </button>
+
+                    {/* Markdown export — images stripped to avoid base64 blob in clipboard */}
                     <button
                         onClick={handleExportMarkdown}
                         className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
