@@ -460,9 +460,25 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                 <div className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-blue-400"><Loader2 size={14} className="animate-spin" /> Processing matrix...</div>
                             ) : (
                                 <>
-                                    <button onClick={() => handleAIAction('Rewrite')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"><Wand2 size={14} className="text-blue-400 dark:text-blue-600" /> Rewrite</button>
-                                    <button onClick={() => handleAIAction('Expand')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"><ArrowLeftRight size={14} className="text-green-400 dark:text-green-600" /> Expand</button>
-                                    <button onClick={() => handleAIAction('Condense')} className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"><Scissors size={14} className="text-red-400 dark:text-red-600" /> Condense</button>
+                                    {/* onMouseDown preventDefault — stops TipTap from clearing
+                                        selection before the click handler fires. Without this,
+                                        mousedown causes onSelectionUpdate → selection.empty → 
+                                        hasSelection=false → toolbar unmounts → click never runs. */}
+                                    <button
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => handleAIAction('Rewrite')}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
+                                    ><Wand2 size={14} className="text-blue-400 dark:text-blue-600" /> Rewrite</button>
+                                    <button
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => handleAIAction('Expand')}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
+                                    ><ArrowLeftRight size={14} className="text-green-400 dark:text-green-600" /> Expand</button>
+                                    <button
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => handleAIAction('Condense')}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
+                                    ><Scissors size={14} className="text-red-400 dark:text-red-600" /> Condense</button>
                                 </>
                             )}
                         </div>
