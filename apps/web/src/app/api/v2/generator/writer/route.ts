@@ -139,29 +139,60 @@ function getLangRule(language: string): string {
 
 // ---------------------------------------------------------------------------
 // Lead summary — first section only
+// FIX 3: Expanded format — hook (stat) + 3-5 data points + article map
+//         (section names) + bottom line + estimated reading time.
 // ---------------------------------------------------------------------------
 async function generateLeadSummary(
   keyword: string, articleTitle: string, sections: string[], language: string
 ): Promise<string> {
-  const langRule = language.toLowerCase().includes("tr")
-    ? "Akıcı, kısa Türkçe. Her madde max 10 kelime."
-    : "Crisp American English. Each bullet under 12 words.";
-  const res = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 400, temperature: 0.4,
-    messages: [{ role: "user", content:
-      `Write a concise HTML lead summary for "${articleTitle}" about "${keyword}".
-Sections: ${sections.slice(0, 5).join(", ")}. ${langRule}
-Hook: ONE sentence with a specific stat (max 20 words). Preview: 3 bullets, each under 12 words.
+  const isTr = language.toLowerCase().includes("tr");
+  const langRule = isTr
+    ? "Akıcı, doğal Türkçe. Kısa ve net. Her madde max 12 kelime."
+    : "Crisp American English. Direct, no fluff. Each bullet under 14 words.";
 
-<div style="background:linear-gradient(135deg,#eff6ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:12px;padding:20px 24px;margin:20px 0 28px;">
-  <p style="font-size:1em;color:#1e293b;line-height:1.7;margin:0 0 12px 0;"><strong style="color:#1d4ed8;">[Hook with stat].</strong> [One follow-up sentence max 15 words].</p>
-  <ul style="margin:0;padding:0 0 0 18px;list-style:disc;">
-    <li style="color:#374151;margin-bottom:5px;line-height:1.5;font-size:0.95em;"><strong>[Takeaway 1 — max 10 words]</strong></li>
-    <li style="color:#374151;margin-bottom:5px;line-height:1.5;font-size:0.95em;"><strong>[Takeaway 2 — max 10 words]</strong></li>
-    <li style="color:#374151;line-height:1.5;font-size:0.95em;"><strong>[Takeaway 3 — max 10 words]</strong></li>
+  // Estimate reading time: assume ~7 sections × avg 250 words = 1750 words → ~7 min
+  const sectionCount = sections.length;
+  const estWords     = sectionCount * 250;
+  const readingMins  = Math.max(3, Math.round(estWords / 238)); // 238 wpm avg
+  const readingLabel = isTr ? `${readingMins} dakika okuma` : `${readingMins} min read`;
+
+  // Article map: first 6 sections as a compact list
+  const mapItems = sections.slice(0, 6).map((s) => `<li style="color:#374151;margin-bottom:3px;font-size:0.88em;">${s}</li>`).join("\n    ");
+
+  const res = await anthropic.messages.create({
+    model: "claude-sonnet-4-6", max_tokens: 600, temperature: 0.4,
+    messages: [{ role: "user", content:
+      `Write an HTML lead summary block for the article titled "${articleTitle}" about "${keyword}".
+${langRule}
+
+Sections in this article: ${sections.slice(0, 8).join(" | ")}
+
+Produce EXACTLY this HTML structure — fill in ONLY the bracketed placeholders. Keep all inline styles exactly as shown:
+
+<div style="background:linear-gradient(135deg,#eff6ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:12px;padding:22px 26px;margin:20px 0 28px;">
+  <p style="font-size:0.75em;font-weight:700;color:#6366f1;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 10px 0;">${readingLabel}</p>
+  <p style="font-size:1.05em;color:#1e293b;line-height:1.7;margin:0 0 14px 0;"><strong style="color:#1d4ed8;">[ONE hook sentence with a concrete stat — max 22 words. Start with a number or surprising fact.]</strong></p>
+  <ul style="margin:0 0 16px 0;padding:0 0 0 18px;list-style:disc;">
+    <li style="color:#374151;margin-bottom:6px;line-height:1.5;font-size:0.95em;"><strong>[Key insight 1 — max 12 words]</strong></li>
+    <li style="color:#374151;margin-bottom:6px;line-height:1.5;font-size:0.95em;"><strong>[Key insight 2 — max 12 words, different angle from #1]</strong></li>
+    <li style="color:#374151;margin-bottom:6px;line-height:1.5;font-size:0.95em;"><strong>[Key insight 3 — max 12 words, actionable or surprising]</strong></li>
+    <li style="color:#374151;margin-bottom:6px;line-height:1.5;font-size:0.95em;"><strong>[Key insight 4 — max 12 words, only if you have a genuinely distinct point]</strong></li>
   </ul>
+  <details style="margin-bottom:14px;">
+    <summary style="font-size:0.82em;font-weight:600;color:#6366f1;cursor:pointer;user-select:none;">${isTr ? "Bu makalede neler var?" : "What this article covers"}</summary>
+    <ul style="margin:8px 0 0 0;padding:0 0 0 16px;list-style:disc;">
+    ${mapItems}
+    </ul>
+  </details>
+  <p style="margin:0;font-size:0.9em;color:#374151;border-top:1px solid #c7d2fe;padding-top:12px;"><strong style="color:#1d4ed8;">${isTr ? "Ana sonuç:" : "Bottom line:"}</strong> [One sentence — the single most important takeaway from the whole article. Max 20 words. No hedge words.]</p>
 </div>
-Return ONLY the raw HTML. No code fences.` }],
+
+RULES:
+- 3 bullets minimum, 4 maximum. Omit bullet 4 if it would repeat bullets 1-3.
+- Each bullet must cover a DIFFERENT angle (data, cost, time, risk, adoption — not variations of the same point).
+- The hook stat must be real and specific (include a %, $, or multiplier).
+- Bottom line must be opinionated and direct — not a restatement of the hook.
+- Do NOT add any content outside the <div>…</div>. Return ONLY the raw HTML.` }],
   });
   const block = res.content.find((b): b is Anthropic.TextBlock => b.type === "text");
   return (block?.text || "").replace(/^```html\s*/i, "").replace(/```\s*$/i, "").trim();
@@ -315,7 +346,23 @@ NOT allowed:
 - More than 1 mention in this section
 
 ${sectionRole === "conclusion" || sectionRole === "cta"
-  ? `This is the conclusion — include ONE clear CTA: "${brandCta}"`
+  ? `[CONCLUSION CTA — STRICT FORMAT]:
+Structure the closing in this EXACT order (max 3 sentences total):
+  1. PROBLEM: Name the core pain the reader came here to solve (1 sentence, specific).
+  2. CAPABILITY: What ${brandName} does that resolves that exact pain — a concrete capability, not a category label (1 sentence).
+  3. OUTCOME + CTA: The measurable result + action: "${brandCta}" (1 sentence).
+
+BANNED PHRASES — never use these, ever:
+- "all-in-one", "all in one"
+- "centralized hub", "central hub", "single hub"
+- "end-to-end", "end to end"
+- "comprehensive solution", "complete solution"
+- "one-stop", "one stop shop"
+- "seamlessly", "effortlessly", "streamline your workflow"
+
+EXAMPLE STRUCTURE (adapt to your topic — do NOT copy verbatim):
+WRONG: "${brandName} is an all-in-one centralized hub for end-to-end content operations."
+RIGHT: "Most teams lose 30% of production time to format inconsistency — ${brandName} enforces brand rules at the point of creation, so every asset ships publication-ready without a review cycle. ${brandCta}"`
   : `This is section ${sectionIndex + 1}. The reader now understands the problem. Introduce ${brandName} as a solution with a specific capability claim.`}
 
 Brand facts: ${brandDesc ? brandDesc.slice(0, 150) : ""} ${brandFeatures ? `| Key features: ${brandFeatures.slice(0, 150)}` : ""}`
