@@ -238,9 +238,13 @@ export function useContentEngine() {
           await new Promise((resolve) => setTimeout(resolve, 3500));
         }
 
+        // 90s timeout — writer calls Claude (~25s) + potential delays.
+        // Without this, Railway's 60s hard limit silently kills the request
+        // and the browser surfaces it as the cryptic "Failed to fetch" error.
         const writerRes = await fetch("/api/v2/generator/writer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(90000),
           body: JSON.stringify({
             researchBlueprint: {
               ...researchBlueprint,
@@ -298,6 +302,7 @@ export function useContentEngine() {
           const editorRes = await fetch("/api/v2/generator/editor", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(60000),
             body: JSON.stringify({ language: targetLanguage, generatedChunk: draftChunk, sectionPlan: section }),
           });
           if (editorRes.ok) {
