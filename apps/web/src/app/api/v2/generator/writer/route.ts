@@ -7,60 +7,11 @@ import Anthropic from "@anthropic-ai/sdk";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
 // ---------------------------------------------------------------------------
-// Gemini image generation
-// Correct model: gemini-3.1-flash-image-preview (Nano Banana 2)
-// Endpoint: v1beta/generateContent
-// Timeout: 60s — model needs ~35-50s to generate
+// NOTE: Image generation lives in /api/v2/generator/image-generate/route.ts
+// (called sequentially by useContentEngine, with retry/backoff on 429).
+// The writer only emits an imagePrompt + a placeholder <figure>; it does NOT
+// call Gemini directly. The old generateImageWithGemini() here was dead code.
 // ---------------------------------------------------------------------------
-async function generateImageWithGemini(prompt: string): Promise<string | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.warn("[GEMINI_IMAGE] GEMINI_API_KEY not set");
-    return null;
-  }
-
-  const models = [
-    "gemini-3.1-flash-image-preview",
-    "gemini-2.0-flash-exp-image-generation",
-    "gemini-2.5-flash-image-preview",
-  ];
-
-  for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-        }),
-        signal: AbortSignal.timeout(60000),
-      });
-
-      if (!res.ok) {
-        console.warn(`[GEMINI_IMAGE] model=${model} status=${res.status}:`, (await res.text()).slice(0, 150));
-        continue;
-      }
-
-      const data = await res.json();
-      const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
-      const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
-      if (!imgPart?.inlineData?.data) {
-        console.warn(`[GEMINI_IMAGE] model=${model} — no inlineData`);
-        continue;
-      }
-
-      console.log(`[GEMINI_IMAGE] Success with model=${model}`);
-      return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
-    } catch (err: any) {
-      console.warn(`[GEMINI_IMAGE] model=${model} error:`, err.message);
-    }
-  }
-
-  console.warn("[GEMINI_IMAGE] All models failed");
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Citation pool reader — reads from pre-fetched citations in research blueprint.
@@ -522,7 +473,7 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     // ── Image — 1-4-7 rule + async decoupling ─────────────────────────
     const shouldGenerateImage = sectionIndex % 3 === 0;
     const imagePrompt = shouldGenerateImage
-      ? `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 100)
+      ? `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 480)
       : null;
 
     const imgHtml = shouldGenerateImage
