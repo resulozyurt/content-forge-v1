@@ -29,6 +29,15 @@ interface GenerationParams {
 }
 
 // ---------------------------------------------------------------------------
+// FIX 5: Spacing between successive Gemini image-generation calls (ms).
+// The image-preview model shares ONE per-project RPM pool, so firing images
+// back-to-back (or concurrently) is the main trigger for 429 RESOURCE_EXHAUSTED.
+// Images are generated one at a time with this gap between them. Tune as needed
+// to match your tier's per-minute image quota.
+// ---------------------------------------------------------------------------
+const IMAGE_RATE_DELAY_MS = 6_000;
+
+// ---------------------------------------------------------------------------
 // BUG 3 FIX: swapImagePlaceholder
 // ---------------------------------------------------------------------------
 function swapImagePlaceholder(
@@ -213,14 +222,21 @@ export function useContentEngine() {
       // Track per-section summaries for context chaining
       const sectionSummaries: string[] = [];
 
-      // FIX 4: Image promises fired in parallel with section writing
+      // FIX 5: Image jobs are COLLECTED during writing, then resolved
+      // sequentially AFTER the writing loop (see PHASE 3.5) so that concurrent
+      // Gemini calls never pile up and trip the per-minute (RPM) quota.
       interface ImageResult {
         imageDataUri: string | null;
         sectionIndex: number;
         sectionTitle: string;
         fallbackSrc: string;
       }
-      const imagePromises: Array<Promise<ImageResult>> = [];
+      interface ImageJob {
+        prompt: string;
+        sectionIndex: number;
+        sectionTitle: string;
+      }
+      const imageJobs: ImageJob[] = [];
 
       // H1
       const h1Html = `<h1 style="font-size:2.2em;font-weight:800;line-height:1.3;margin:0 0 32px;color:#0f172a;">${articleTitle}</h1>\n\n`;
@@ -273,20 +289,12 @@ export function useContentEngine() {
           sectionIndex: writerSectionIndex,
         } = await writerRes.json();
 
-        // Fire image generation in parallel — do NOT await
+        // FIX 5: Collect the image job — do NOT fire the request here.
+        // Firing inside the loop let multiple long-running (now retrying) image
+        // calls overlap and share the per-project RPM pool → 429. We resolve
+        // them one at a time after the writing loop instead.
         if (imagePrompt) {
-          const imgPromise: Promise<ImageResult> = fetch("/api/v2/generator/image-generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt: imagePrompt,
-              sectionIndex: i,
-              sectionTitle: section.title,
-            }),
-          })
-            .then((r) => r.ok ? r.json() : Promise.resolve({ imageDataUri: null, sectionIndex: i, sectionTitle: section.title, fallbackSrc: "" }))
-            .catch(() => ({ imageDataUri: null, sectionIndex: i, sectionTitle: section.title, fallbackSrc: "" }));
-          imagePromises.push(imgPromise);
+          imageJobs.push({ prompt: imagePrompt, sectionIndex: i, sectionTitle: section.title });
         }
 
         if (newSummary) {
@@ -317,31 +325,57 @@ export function useContentEngine() {
         setGeneratedContent(fullHtml);
       }
 
-      // ── PHASE 3.5: RESOLVE IMAGES + SWAP PLACEHOLDERS ───────────────────
-      if ((imagePromises.length ?? 0) > 0) {
-        try {
-          const imageResults = await Promise.allSettled(imagePromises);
-          let swappedHtml = fullHtml;
+      // ── PHASE 3.5: RESOLVE IMAGES SEQUENTIALLY + SWAP PLACEHOLDERS ───────
+      // The single most important guard against Gemini 429: generate images one
+      // at a time, with IMAGE_RATE_DELAY_MS spacing, so overlapping requests
+      // never share (and exhaust) the per-project per-minute quota. Each image
+      // is swapped into the HTML as soon as it resolves — progressive render.
+      if ((imageJobs.length ?? 0) > 0) {
+        let swappedHtml = fullHtml;
 
-          for (const result of imageResults) {
-            if (result.status !== "fulfilled") continue;
-            const { imageDataUri, sectionIndex: imgIdx, sectionTitle, fallbackSrc } = result.value;
+        for (let j = 0; j < imageJobs.length; j++) {
+          const job = imageJobs[j];
 
-            const finalSrc = imageDataUri ?? fallbackSrc;
-            if (!finalSrc) {
-              console.warn(`[ENGINE] No image src for section ${imgIdx} — placeholder stays`);
-              continue;
-            }
-
-            const altText = (sectionTitle || "").replace(/"/g, "&quot;");
-            swappedHtml = swapImagePlaceholder(swappedHtml, imgIdx, finalSrc, altText);
-            console.log(`[ENGINE] Image swapped for section ${imgIdx}: ${imageDataUri ? "Gemini" : "fallback"}`);
+          // Space successive calls to stay under the per-minute image quota.
+          if (j > 0) {
+            await new Promise((resolve) => setTimeout(resolve, IMAGE_RATE_DELAY_MS));
           }
 
+          let result: ImageResult;
+          try {
+            const r = await fetch("/api/v2/generator/image-generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              // Slightly above the route's own ~110s deadline so its internal
+              // retries can complete before the client aborts.
+              signal: AbortSignal.timeout(120000),
+              body: JSON.stringify({
+                prompt: job.prompt,
+                sectionIndex: job.sectionIndex,
+                sectionTitle: job.sectionTitle,
+              }),
+            });
+            result = r.ok
+              ? await r.json()
+              : { imageDataUri: null, sectionIndex: job.sectionIndex, sectionTitle: job.sectionTitle, fallbackSrc: "" };
+          } catch {
+            result = { imageDataUri: null, sectionIndex: job.sectionIndex, sectionTitle: job.sectionTitle, fallbackSrc: "" };
+          }
+
+          const { imageDataUri, sectionIndex: imgIdx, sectionTitle, fallbackSrc } = result;
+          const finalSrc = imageDataUri ?? fallbackSrc;
+          if (!finalSrc) {
+            console.warn(`[ENGINE] No image src for section ${imgIdx} — placeholder stays`);
+            continue;
+          }
+
+          const altText = (sectionTitle || "").replace(/"/g, "&quot;");
+          swappedHtml = swapImagePlaceholder(swappedHtml, imgIdx, finalSrc, altText);
+          console.log(`[ENGINE] Image swapped for section ${imgIdx}: ${imageDataUri ? "Gemini" : "fallback"}`);
+
+          // Progressive update — show each image the moment it resolves.
           fullHtml = swappedHtml;
           setGeneratedContent(swappedHtml);
-        } catch (e) {
-          console.warn("[ENGINE] Image swap error — content unaffected", e);
         }
       }
 
