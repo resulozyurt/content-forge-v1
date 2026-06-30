@@ -7,6 +7,56 @@ import Anthropic from "@anthropic-ai/sdk";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
 // ---------------------------------------------------------------------------
+// TABLE BUG FIX (root cause): Claude occasionally hits max_tokens mid-<table>
+// (especially html_table format + subheadings, which can exceed the token
+// budget). The resulting HTML has an unclosed <table>/<tbody>/<tr>/<td> chain.
+// When that string is later concatenated with subsequent sections and parsed
+// by the browser's HTML5 parser (DOMPurify.sanitize / TipTap setContent),
+// the parser's "in cell" insertion mode keeps swallowing all following
+// content into that still-open last <td> — which is exactly the reported
+// symptom: "content after the table goes into the table's last row."
+//
+// Fix: generically close any unclosed tag at the end of the generated HTML
+// using a stack-based scan. This is the FIRST of three defense layers
+// (writer → editor → useContentEngine all apply this same repair).
+// ---------------------------------------------------------------------------
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
+function closeUnclosedHtmlTags(html: string): string {
+  if (!html) return html;
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(\/?)>/g;
+  const stack: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagRegex.exec(html)) !== null) {
+    const isClosing = match[1] === "/";
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing = match[3] === "/";
+
+    if (VOID_TAGS.has(tagName) || isSelfClosing) continue;
+
+    if (isClosing) {
+      // Pop the nearest matching open tag (tolerant of minor mis-nesting —
+      // we care about catching leftover-open structural tags, not full
+      // strict HTML validation).
+      const idx = stack.lastIndexOf(tagName);
+      if (idx !== -1) stack.splice(idx, 1);
+    } else {
+      stack.push(tagName);
+    }
+  }
+
+  if (stack.length === 0) return html;
+
+  const closingTags = stack.reverse().map((t) => `</${t}>`).join("");
+  console.warn(`[HTML_REPAIR][writer] Unclosed tag(s) auto-closed: ${stack.join(", ")}`);
+  return html + closingTags;
+}
+
+// ---------------------------------------------------------------------------
 // NOTE: Image generation lives in /api/v2/generator/image-generate/route.ts
 // (called sequentially by useContentEngine, with retry/backoff on 429).
 // The writer only emits an imagePrompt + a placeholder <figure>; it does NOT
@@ -456,9 +506,16 @@ ${narrativeInstruction}
 
 Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 
-    // Token budget: numbered headings and subheadings need more room
+    // Token budget: numbered headings and subheadings need more room.
+    // TABLE BUG FIX: html_table is the #1 truncation source — min 5 rows ×
+    // 3-4 cols + optional per-subheading mini-tables routinely exceeds 3200.
+    // Bump its floor independently of the subheading/numbered-heading bonus.
     const hasSubHeadings = subHeadings.length > 0;
-    const sectionMaxTokens = (promisedCount && promisedCount >= 4) || hasSubHeadings ? 3200 : 2000;
+    const isTableFormat = sectionPlan.requiredFormat === "html_table";
+    let sectionMaxTokens = (promisedCount && promisedCount >= 4) || hasSubHeadings ? 3200 : 2000;
+    if (isTableFormat) {
+      sectionMaxTokens = hasSubHeadings ? 4096 : 3200;
+    }
 
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6", max_tokens: sectionMaxTokens,
@@ -466,9 +523,26 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
       messages: [{ role: "user", content: `Write HTML for: "${sectionPlan.title}"` }],
       temperature: 0.4,
     });
+
+    // TABLE BUG FIX: detect truncation explicitly. If Claude hit the token
+    // ceiling mid-tag, the close-tag repair below still saves the DOM, but we
+    // log it so truncation frequency is visible (and can inform future
+    // max_tokens tuning) instead of failing silently.
+    if (response.stop_reason === "max_tokens") {
+      console.warn(
+        `[WRITER_TRUNCATED] section="${sectionPlan.title}" format=${sectionPlan.requiredFormat} ` +
+        `maxTokens=${sectionMaxTokens} — response hit max_tokens, output may be cut mid-tag.`
+      );
+    }
+
     const contentBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
     let generatedHtml = (contentBlock?.text || "")
       .replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "").trim();
+
+    // TABLE BUG FIX — Layer 1: deterministically close any unclosed tag
+    // (table/tr/td/ul/li/blockquote/etc.) before this HTML ever gets
+    // concatenated with the next section or parsed by a browser DOM parser.
+    generatedHtml = closeUnclosedHtmlTags(generatedHtml);
 
     // ── Image — 1-4-7 rule + async decoupling ─────────────────────────
     const shouldGenerateImage = sectionIndex % 3 === 0;

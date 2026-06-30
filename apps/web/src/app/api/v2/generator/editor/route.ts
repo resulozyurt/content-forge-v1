@@ -7,6 +7,67 @@ import Anthropic from "@anthropic-ai/sdk";
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
 // ---------------------------------------------------------------------------
+// TABLE BUG FIX — Layer 2 (editor agent).
+// Same repair function as writer/route.ts (duplicated intentionally: these
+// are independent serverless routes with no shared runtime). This is the
+// SECOND defense layer: even if a chunk reaches the editor without having
+// been repaired upstream (e.g. an older client, or a future writer change),
+// it gets structurally closed here before either:
+//   (a) passing through as "approved", or
+//   (b) being sent to Claude for stylistic auto-correction.
+// We ALSO add a real open/close tag-count check (previous code only checked
+// for the presence of "<table", not whether it was ever closed) so a
+// truncated table actively triggers the existing Claude auto-correct path
+// instead of silently passing QA.
+// ---------------------------------------------------------------------------
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
+function closeUnclosedHtmlTags(html: string): string {
+  if (!html) return html;
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(\/?)>/g;
+  const stack: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagRegex.exec(html)) !== null) {
+    const isClosing = match[1] === "/";
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing = match[3] === "/";
+
+    if (VOID_TAGS.has(tagName) || isSelfClosing) continue;
+
+    if (isClosing) {
+      const idx = stack.lastIndexOf(tagName);
+      if (idx !== -1) stack.splice(idx, 1);
+    } else {
+      stack.push(tagName);
+    }
+  }
+
+  if (stack.length === 0) return html;
+
+  const closingTags = stack.reverse().map((t) => `</${t}>`).join("");
+  console.warn(`[HTML_REPAIR][editor] Unclosed tag(s) auto-closed: ${stack.join(", ")}`);
+  return html + closingTags;
+}
+
+// Returns the list of structural tag names that are unbalanced (open count
+// != close count) — used to flag truncated tables/lists/blockquotes for the
+// Claude auto-correct pass, independent of the deterministic repair above.
+function findUnbalancedStructuralTags(html: string): string[] {
+  const tracked = ["table", "thead", "tbody", "tfoot", "tr", "td", "th", "ul", "ol", "li", "blockquote"];
+  const unbalanced: string[] = [];
+  for (const tag of tracked) {
+    const openCount = (html.match(new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi")) || []).length;
+    const closeCount = (html.match(new RegExp(`<\\/${tag}>`, "gi")) || []).length;
+    if (openCount !== closeCount) unbalanced.push(`${tag} (open:${openCount} close:${closeCount})`);
+  }
+  return unbalanced;
+}
+
+// ---------------------------------------------------------------------------
 // Validates paragraph sentence density from HTML <p> tags.
 // Strips all HTML tags (including long inline style="") before counting
 // sentences — prevents style attribute strings from corrupting text extraction.
@@ -68,12 +129,18 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     parsedBody = await req.json();
-    const { generatedChunk, sectionPlan, language } = parsedBody;
+    const { generatedChunk: rawChunk, sectionPlan, language } = parsedBody;
 
     // Guard: malformed or missing chunk — pass through immediately
-    if (!generatedChunk || typeof generatedChunk !== "string" || generatedChunk.length < 10) {
-      return NextResponse.json({ status: "approved", chunk: generatedChunk || "" }, { status: 200 });
+    if (!rawChunk || typeof rawChunk !== "string" || rawChunk.length < 10) {
+      return NextResponse.json({ status: "approved", chunk: rawChunk || "" }, { status: 200 });
     }
+
+    // TABLE BUG FIX: deterministically close any unclosed tag the moment the
+    // chunk arrives — before any validation logic runs. Whatever happens
+    // downstream (approved as-is, or sent to Claude for correction), the
+    // structural integrity of table/list/blockquote tags is guaranteed.
+    const generatedChunk = closeUnclosedHtmlTags(rawChunk);
 
     const validationErrors: string[] = [];
     const lowerChunk = generatedChunk.toLowerCase();
@@ -82,6 +149,19 @@ export async function POST(req: NextRequest) {
     // ── Format validations ──────────────────────────────────────────────────
     if (sectionPlan?.requiredFormat === "html_table" && !lowerChunk.includes("<table")) {
       validationErrors.push("MISSING TABLE: Section requires an HTML <table> with <thead> and <tbody>. Generate a data-rich comparison table.");
+    }
+
+    // TABLE BUG FIX: the old check only looked for "<table" presence, never
+    // for whether it (or any other structural tag) was actually closed. A
+    // truncated table previously sailed through as "approved". This forces
+    // it into the Claude auto-correct path instead, with the exact tag
+    // imbalance named so Claude can fix it precisely.
+    const unbalancedTags = findUnbalancedStructuralTags(generatedChunk);
+    if (unbalancedTags.length > 0) {
+      validationErrors.push(
+        `UNCLOSED/MISMATCHED TAGS DETECTED: ${unbalancedTags.join(", ")}. Every opening tag must have a matching closing tag — rebuild the structure so it is fully balanced.`
+      );
+      console.warn(`[EDITOR] Unbalanced structural tags in section "${sectionPlan?.title}": ${unbalancedTags.join(", ")}`);
     }
 
     if (
@@ -167,7 +247,7 @@ ${chunkForClaude}
     try {
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-6",
-        max_tokens: 2000,
+        max_tokens: 3000,
         messages: [{ role: "user", content: correctionPrompt }],
         temperature: 0.1,
       });
@@ -188,6 +268,11 @@ ${chunkForClaude}
       extractedImgs.forEach((img, idx) => {
         correctedChunk = correctedChunk.replace(`%%IMG_${idx}%%`, img);
       });
+
+      // TABLE BUG FIX: final safety net — Claude's correction pass could in
+      // theory still leave something unclosed (e.g. if it ran out of its own
+      // max_tokens). Repair once more before returning.
+      correctedChunk = closeUnclosedHtmlTags(correctedChunk);
 
       return NextResponse.json({ status: "corrected", chunk: correctedChunk }, { status: 200 });
     } catch (claudeErr) {

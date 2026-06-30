@@ -38,6 +38,51 @@ interface GenerationParams {
 const IMAGE_RATE_DELAY_MS = 6_000;
 
 // ---------------------------------------------------------------------------
+// TABLE BUG FIX — Layer 3 (final safety net).
+// This is the LAST common point before all section chunks are concatenated
+// into one HTML string (`fullHtml += finalChunk`) and handed to DOMPurify /
+// TipTap's setContent(), which parse it with the browser's native HTML5
+// parser. If any chunk still contains an unclosed <table>/<tr>/<td> at this
+// point — whether the writer or editor repair layers were bypassed, timed
+// out, or a future change removes them — the browser parser's "in cell"
+// insertion mode will silently swallow everything that follows into that
+// open cell. This layer guarantees that can never happen, regardless of what
+// happened upstream.
+// ---------------------------------------------------------------------------
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
+function closeUnclosedHtmlTags(html: string): string {
+  if (!html) return html;
+  const tagRegex = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(\/?)>/g;
+  const stack: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = tagRegex.exec(html)) !== null) {
+    const isClosing = match[1] === "/";
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing = match[3] === "/";
+
+    if (VOID_TAGS.has(tagName) || isSelfClosing) continue;
+
+    if (isClosing) {
+      const idx = stack.lastIndexOf(tagName);
+      if (idx !== -1) stack.splice(idx, 1);
+    } else {
+      stack.push(tagName);
+    }
+  }
+
+  if (stack.length === 0) return html;
+
+  const closingTags = stack.reverse().map((t) => `</${t}>`).join("");
+  console.warn(`[HTML_REPAIR][useContentEngine] Unclosed tag(s) auto-closed before concat: ${stack.join(", ")}`);
+  return html + closingTags;
+}
+
+// ---------------------------------------------------------------------------
 // BUG 3 FIX: swapImagePlaceholder
 // ---------------------------------------------------------------------------
 function swapImagePlaceholder(
@@ -320,6 +365,13 @@ export function useContentEngine() {
         } catch (e) {
           console.warn(`[ENGINE] Editor error section ${i} — using draft`, e);
         }
+
+        // TABLE BUG FIX — Layer 3: repair any unclosed tag in this chunk
+        // immediately before it gets permanently concatenated. This is the
+        // last point where it's still a single section's HTML rather than
+        // part of one giant string that browsers/TipTap will parse as a
+        // single DOM tree.
+        finalChunk = closeUnclosedHtmlTags(finalChunk);
 
         fullHtml += finalChunk + "\n\n";
         setGeneratedContent(fullHtml);
