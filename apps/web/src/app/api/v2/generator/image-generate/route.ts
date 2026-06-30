@@ -9,6 +9,13 @@
 //   Railway workers are serverless — a response that has already returned cannot
 //   keep running background work. This route is a proper awaitable HTTP call
 //   that the engine fires concurrently with subsequent section writes.
+//
+// FIX 5 — Robust 429 handling.
+//   The dominant production failure was status=429 (RESOURCE_EXHAUSTED): Gemini
+//   rejects the request when RPM/RPD/IPM is hit. The previous code returned null
+//   on the FIRST non-200, so a single transient 429 killed the whole image.
+//   We now honor the server-suggested retryDelay and back off + retry, while
+//   treating real permanent errors (400/403/404) as immediate failures.
 // ---------------------------------------------------------------------------
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,23 +23,61 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 
 // ---------------------------------------------------------------------------
-// Gemini image generation — identical config to writer/route.ts
-// Model: gemini-3.1-flash-image-preview, timeout: 60s, v1beta endpoint
+// Retry / backoff configuration
 // ---------------------------------------------------------------------------
+const MAX_ATTEMPTS = 3;          // total tries per model (incl. first call)
+const BASE_BACKOFF_MS = 1_000;   // exponential base for transient (non-429) errors
+const MAX_BACKOFF_MS = 20_000;   // never wait longer than this between tries
+const DEADLINE_MS = 110_000;     // hard ceiling on total time per model call
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Parse the server-suggested retry delay from a 429 response.
+// Gemini returns details[].retryDelay like "16s" / "16.9s" in the JSON body,
+// and sometimes a Retry-After header (seconds). We honor whichever we find so
+// we wait exactly as long as the quota window needs instead of guessing.
+// ---------------------------------------------------------------------------
+function parseRetryDelayMs(bodyText: string, headers: Headers): number | null {
+  // 1) Retry-After header (seconds)
+  const headerVal = headers.get("retry-after");
+  if (headerVal) {
+    const secs = Number(headerVal);
+    if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+  }
+  // 2) RetryInfo in the JSON body: error.details[].retryDelay = "16s"
+  try {
+    const parsed = JSON.parse(bodyText);
+    const details: any[] = parsed?.error?.details ?? [];
+    for (const d of details) {
+      if (typeof d?.retryDelay === "string") {
+        const m = d.retryDelay.match(/([\d.]+)s/);
+        if (m) {
+          const secs = parseFloat(m[1]);
+          if (Number.isFinite(secs)) return Math.ceil(secs * 1000);
+        }
+      }
+    }
+  } catch {
+    /* body wasn't JSON — ignore */
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Gemini requires an explicit image-generation instruction in the prompt.
 // Without the "Generate a photorealistic image:" prefix the model sometimes
 // returns a text-only response (no inlineData), especially for non-English
-// or abstract prompts. We also retry once on no-inlineData before moving on.
+// or abstract prompts. We also retry on no-inlineData before giving up.
 // ---------------------------------------------------------------------------
 async function callGemini(model: string, prompt: string, apiKey: string): Promise<string | null> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   // Prefix forces Gemini into image-generation mode regardless of prompt language
   const fullPrompt = `Generate a photorealistic image: ${prompt}`;
+  const startedAt = Date.now();
 
-  // Up to 2 attempts per model — handles intermittent no-inlineData responses
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -45,9 +90,39 @@ async function callGemini(model: string, prompt: string, apiKey: string): Promis
       });
 
       if (!res.ok) {
-        const errText = (await res.text()).slice(0, 150);
-        console.warn(`[IMAGE_GEN] model=${model} status=${res.status}:`, errText);
-        return null; // Non-200 → don't retry, move to next model
+        const errText = (await res.text()).slice(0, 300);
+
+        // 429 (rate limit) and 5xx (server) are transient → back off + retry.
+        // Other 4xx (400/403/404) are permanent → stop immediately, retry is futile.
+        const isRateLimited = res.status === 429;
+        const isServerErr = res.status >= 500;
+
+        if (!isRateLimited && !isServerErr) {
+          console.warn(`[IMAGE_GEN] model=${model} status=${res.status} (permanent):`, errText);
+          return null;
+        }
+
+        if (attempt === MAX_ATTEMPTS) {
+          console.warn(`[IMAGE_GEN] model=${model} status=${res.status} — out of retries:`, errText);
+          return null;
+        }
+
+        // Honor server retryDelay on 429; otherwise exponential backoff with jitter.
+        const serverDelay = isRateLimited ? parseRetryDelayMs(errText, res.headers) : null;
+        const backoff = serverDelay ?? BASE_BACKOFF_MS * 2 ** (attempt - 1);
+        const wait = Math.min(backoff, MAX_BACKOFF_MS) + Math.floor(Math.random() * 400);
+
+        // Respect the overall deadline — don't sleep past it.
+        if (Date.now() - startedAt + wait > DEADLINE_MS) {
+          console.warn(`[IMAGE_GEN] model=${model} status=${res.status} — deadline reached, aborting`);
+          return null;
+        }
+
+        console.warn(
+          `[IMAGE_GEN] model=${model} status=${res.status} attempt=${attempt}/${MAX_ATTEMPTS} — retrying in ${wait}ms`
+        );
+        await sleep(wait);
+        continue;
       }
 
       const data = await res.json();
@@ -55,16 +130,22 @@ async function callGemini(model: string, prompt: string, apiKey: string): Promis
       const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith("image/"));
 
       if (!imgPart?.inlineData?.data) {
-        console.warn(`[IMAGE_GEN] model=${model} attempt=${attempt} — no inlineData`);
-        // Retry once; if second attempt also fails, move to next model
+        console.warn(`[IMAGE_GEN] model=${model} attempt=${attempt}/${MAX_ATTEMPTS} — no inlineData`);
+        if (attempt === MAX_ATTEMPTS) return null;
+        // Text-only responses are usually transient — short backoff then retry.
+        await sleep(Math.min(BASE_BACKOFF_MS * attempt, 4_000));
         continue;
       }
 
       console.log(`[IMAGE_GEN] Success model=${model} attempt=${attempt}`);
       return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
     } catch (err: any) {
-      console.warn(`[IMAGE_GEN] model=${model} attempt=${attempt} error:`, err.message);
-      return null; // Timeout / network error → move to next model immediately
+      // Timeout / network error → back off + retry (previously: give up immediately)
+      console.warn(`[IMAGE_GEN] model=${model} attempt=${attempt}/${MAX_ATTEMPTS} error:`, err?.message);
+      if (attempt === MAX_ATTEMPTS) return null;
+      const wait = Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      if (Date.now() - startedAt + wait > DEADLINE_MS) return null;
+      await sleep(wait);
     }
   }
 
