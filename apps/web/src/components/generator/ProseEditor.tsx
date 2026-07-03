@@ -21,7 +21,7 @@ import {
     UploadCloud, CheckCircle2, Activity, Target,
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
     Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
-    ChevronRight, BookOpen, ListChecks, Hash, XCircle
+    ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -78,9 +78,9 @@ interface ProseEditorProps {
 type SidebarTab = 'optimize' | 'research' | 'technical';
 
 function AccordionSection({
-    title, icon: Icon, badgeCount, defaultOpen = false, children
+    title, icon: Icon, badgeCount, defaultOpen = false, tooltip, children
 }: {
-    title: string; icon: any; badgeCount?: number | string; defaultOpen?: boolean; children: React.ReactNode
+    title: string; icon: any; badgeCount?: number | string; defaultOpen?: boolean; tooltip?: string; children: React.ReactNode
 }) {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
@@ -95,6 +95,15 @@ function AccordionSection({
                         <Icon size={16} className="text-indigo-500" />
                     </div>
                     <span className="text-sm font-bold text-gray-900 dark:text-white">{title}</span>
+                    {tooltip && (
+                        <span
+                            title={tooltip}
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center cursor-help text-gray-400 hover:text-indigo-500 transition-colors"
+                        >
+                            <Info size={13} />
+                        </span>
+                    )}
                 </div>
                 <div className="flex items-center gap-3">
                     {badgeCount !== undefined && (
@@ -469,16 +478,20 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                 </div>
 
                 <div className="flex items-center gap-3">
-                    <button
-                        onClick={handleProofread}
-                        disabled={isProofreading}
-                        className={cn(
-                            "inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg transition-colors",
-                            isProofreading ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 dark:hover:bg-gray-700"
-                        )}
-                    >
-                        {isProofreading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyzing...</> : <><SpellCheck size={16} className="mr-2 text-indigo-500" /> Proofread</>}
-                    </button>
+                    {/* Faz 6.1: Proofread stays wired exactly as-is but is hidden from users.
+                        Kept in the DOM (display:none) so handleProofread/isProofreading remain referenced. */}
+                    <div className="hidden">
+                        <button
+                            onClick={handleProofread}
+                            disabled={isProofreading}
+                            className={cn(
+                                "inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg transition-colors",
+                                isProofreading ? "opacity-50 cursor-not-allowed" : "hover:bg-gray-50 dark:hover:bg-gray-700"
+                            )}
+                        >
+                            {isProofreading ? <><Loader2 size={16} className="mr-2 animate-spin" /> Analyzing...</> : <><SpellCheck size={16} className="mr-2 text-indigo-500" /> Proofread</>}
+                        </button>
+                    </div>
 
                     {/* BUG 1 FIX: Copy HTML — h2/h3/table/link dahil tam HTML kopyalar */}
                     <button
@@ -563,7 +576,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                         {activeTab === 'optimize' && (
                             <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-300">
-                                <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true}>
+                                <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true} tooltip="How easy your article is to read. A higher Flesch score means simpler, more scannable text — aim for 60+ for a general audience.">
                                     <div className="space-y-4">
                                         <div>
                                             <div className="flex justify-between text-sm mb-1">
@@ -601,7 +614,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                     </div>
                                 </AccordionSection>
 
-                                <AccordionSection title="SEO Checklist" icon={ListChecks} badgeCount={`${checklistScore}/10`} defaultOpen={false}>
+                                <AccordionSection title="SEO Checklist" icon={ListChecks} badgeCount={`${checklistScore}/10`} defaultOpen={false} tooltip="A pass/fail check on on-page SEO basics: keyword placement, headings, links, and length. Aim for 8/10 or higher before publishing.">
                                     <div className="space-y-3">
                                         <div className="flex items-center justify-between mb-4">
                                             <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Optimization Score</span>
@@ -627,7 +640,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                     </div>
                                 </AccordionSection>
 
-                                <AccordionSection title="Keyword Density" icon={Hash} badgeCount={keywordDensity.length} defaultOpen={false}>
+                                <AccordionSection title="Keyword Density" icon={Hash} badgeCount={keywordDensity.length} defaultOpen={false} tooltip="How often each keyword appears vs. total words. Keep your main keyword near 0.5–1.5%; going over ~2.5% looks like keyword stuffing and can hurt rankings.">
                                     <div className="space-y-2">
                                         {keywordDensity.map((kd, idx) => (
                                             <div key={idx} className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-lg p-3">
