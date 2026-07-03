@@ -162,17 +162,14 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                 {activeTab === "clusters" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {data.clusterKeywords.map((item, idx) => (
-                            <div key={idx} className="p-4 border border-gray-200 dark:border-gray-800 rounded-xl flex flex-col gap-4 bg-white dark:bg-gray-900 shadow-sm hover:border-blue-200 dark:hover:border-blue-900 transition-colors h-full">
-                                <div className="flex justify-between items-center gap-2">
-                                    <span className="font-semibold text-gray-800 dark:text-gray-200">{item.keyword}</span>
-                                    <span className={`text-xs px-3 py-1.5 rounded-lg font-bold uppercase tracking-wider flex-shrink-0 ${item.intent === 'informational' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' :
-                                            item.intent === 'commercial' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' :
-                                                'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                                        }`}>
-                                        {item.intent}
-                                    </span>
-                                </div>
-                                <SendToGeneratorButton seedKeyword={seedKeyword} keyword={item.keyword} />
+                            <div key={idx} className="p-4 border border-gray-200 dark:border-gray-800 rounded-xl flex justify-between items-center bg-white dark:bg-gray-900 shadow-sm hover:border-blue-200 dark:hover:border-blue-900 transition-colors">
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">{item.keyword}</span>
+                                <span className={`text-xs px-3 py-1.5 rounded-lg font-bold uppercase tracking-wider flex-shrink-0 ${item.intent === 'informational' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' :
+                                        item.intent === 'commercial' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' :
+                                            'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                    }`}>
+                                    {item.intent}
+                                </span>
                             </div>
                         ))}
                     </div>
@@ -182,17 +179,14 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                 {activeTab === "ai" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         {data.aiOverviewKeywords.map((item, idx) => (
-                            <div key={idx} className="p-5 border border-indigo-100 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/50 to-white dark:from-indigo-900/10 dark:to-gray-900 rounded-xl flex flex-col shadow-sm h-full">
-                                <div className="flex gap-4 items-start mb-5">
-                                    <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/40 rounded-xl text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0 shadow-inner">
-                                        <Sparkles size={20} />
-                                    </div>
-                                    <div>
-                                        <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5 capitalize">{item.keyword}</h5>
-                                        <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.reason}</p>
-                                    </div>
+                            <div key={idx} className="p-5 border border-indigo-100 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/50 to-white dark:from-indigo-900/10 dark:to-gray-900 rounded-xl flex gap-4 items-start shadow-sm">
+                                <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/40 rounded-xl text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0 shadow-inner">
+                                    <Sparkles size={20} />
                                 </div>
-                                <SendToGeneratorButton seedKeyword={seedKeyword} keyword={item.keyword} />
+                                <div>
+                                    <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5 capitalize">{item.keyword}</h5>
+                                    <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.reason}</p>
+                                </div>
                             </div>
                         ))}
                     </div>
