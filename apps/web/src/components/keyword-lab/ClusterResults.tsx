@@ -1,16 +1,37 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { useLocale } from "next-intl";
 import { KeywordResult } from "@/types/keyword-lab";
 import TopicIdeaCard from "./TopicIdeaCard";
 import {
     List, TrendingUp, Sparkles, Lightbulb, Wrench,
-    Target, LayoutTemplate, Zap, Code, FileText
+    Target, LayoutTemplate, Zap, Code, FileText, Send, ArrowRight
 } from "lucide-react";
 
 interface ClusterResultsProps {
     data: KeywordResult;
     seedKeyword: string;
+}
+
+// Shared bridge button. Keyword-only tabs (SEO, Clusters, AI Overviews) have no
+// generated title, so the keyword itself is passed as the generator `topic`
+// (same contract as TopicIdeaCard, which passes idea.title).
+function SendToGeneratorButton({ seedKeyword, keyword }: { seedKeyword: string; keyword: string }) {
+    const locale = useLocale();
+    const generatorUrl = `/${locale}/generator?seed=${encodeURIComponent(seedKeyword)}&topic=${encodeURIComponent(keyword)}`;
+
+    return (
+        <Link
+            href={generatorUrl}
+            className="mt-auto w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-50 hover:bg-blue-50 dark:bg-gray-800 dark:hover:bg-blue-900/20 text-gray-700 hover:text-blue-600 dark:text-gray-300 dark:hover:text-blue-400 border border-gray-200 dark:border-gray-700 rounded-lg font-medium transition-colors group"
+        >
+            <Send size={16} />
+            Send to AI Generator
+            <ArrowRight size={16} className="opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+        </Link>
+    );
 }
 
 // Each tab carries its own icon + a plain-English, benefit-first description.
@@ -113,7 +134,7 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                 {activeTab === "seo" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         {data.seoOpportunities.map((item, idx) => (
-                            <div key={idx} className="p-5 border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 shadow-sm hover:shadow-md transition-shadow">
+                            <div key={idx} className="p-5 border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-gray-900 shadow-sm hover:shadow-md transition-shadow flex flex-col h-full">
                                 <div className="flex justify-between items-start mb-3 gap-2">
                                     <h5 className="font-bold text-gray-900 dark:text-white leading-tight">{item.keyword}</h5>
                                     <span className={`text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-full font-bold flex-shrink-0 ${item.competition === 'low' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
@@ -123,7 +144,7 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                                         {item.competition} COMP
                                     </span>
                                 </div>
-                                <div className="flex flex-wrap gap-2 mt-4">
+                                <div className="flex flex-wrap gap-2 mt-4 mb-5">
                                     <span className="text-xs px-2.5 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 rounded-lg flex items-center gap-1.5 font-medium border border-blue-100 dark:border-blue-800/30">
                                         <Target size={14} /> {item.type}
                                     </span>
@@ -131,6 +152,7 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                                         <LayoutTemplate size={14} /> {item.format}
                                     </span>
                                 </div>
+                                <SendToGeneratorButton seedKeyword={seedKeyword} keyword={item.keyword} />
                             </div>
                         ))}
                     </div>
@@ -140,14 +162,17 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                 {activeTab === "clusters" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {data.clusterKeywords.map((item, idx) => (
-                            <div key={idx} className="p-4 border border-gray-200 dark:border-gray-800 rounded-xl flex justify-between items-center bg-white dark:bg-gray-900 shadow-sm group hover:border-blue-200 dark:hover:border-blue-900 transition-colors">
-                                <span className="font-semibold text-gray-800 dark:text-gray-200">{item.keyword}</span>
-                                <span className={`text-xs px-3 py-1.5 rounded-lg font-bold uppercase tracking-wider ${item.intent === 'informational' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' :
-                                        item.intent === 'commercial' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' :
-                                            'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                                    }`}>
-                                    {item.intent}
-                                </span>
+                            <div key={idx} className="p-4 border border-gray-200 dark:border-gray-800 rounded-xl flex flex-col gap-4 bg-white dark:bg-gray-900 shadow-sm hover:border-blue-200 dark:hover:border-blue-900 transition-colors h-full">
+                                <div className="flex justify-between items-center gap-2">
+                                    <span className="font-semibold text-gray-800 dark:text-gray-200">{item.keyword}</span>
+                                    <span className={`text-xs px-3 py-1.5 rounded-lg font-bold uppercase tracking-wider flex-shrink-0 ${item.intent === 'informational' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' :
+                                            item.intent === 'commercial' ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' :
+                                                'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                        }`}>
+                                        {item.intent}
+                                    </span>
+                                </div>
+                                <SendToGeneratorButton seedKeyword={seedKeyword} keyword={item.keyword} />
                             </div>
                         ))}
                     </div>
@@ -157,14 +182,17 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                 {activeTab === "ai" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                         {data.aiOverviewKeywords.map((item, idx) => (
-                            <div key={idx} className="p-5 border border-indigo-100 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/50 to-white dark:from-indigo-900/10 dark:to-gray-900 rounded-xl flex gap-4 items-start shadow-sm">
-                                <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/40 rounded-xl text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0 shadow-inner">
-                                    <Sparkles size={20} />
+                            <div key={idx} className="p-5 border border-indigo-100 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/50 to-white dark:from-indigo-900/10 dark:to-gray-900 rounded-xl flex flex-col shadow-sm h-full">
+                                <div className="flex gap-4 items-start mb-5">
+                                    <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/40 rounded-xl text-indigo-600 dark:text-indigo-400 mt-0.5 flex-shrink-0 shadow-inner">
+                                        <Sparkles size={20} />
+                                    </div>
+                                    <div>
+                                        <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5 capitalize">{item.keyword}</h5>
+                                        <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.reason}</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5 capitalize">{item.keyword}</h5>
-                                    <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.reason}</p>
-                                </div>
+                                <SendToGeneratorButton seedKeyword={seedKeyword} keyword={item.keyword} />
                             </div>
                         ))}
                     </div>
