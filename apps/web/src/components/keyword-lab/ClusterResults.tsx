@@ -4,7 +4,7 @@ import { useState } from "react";
 import { KeywordResult } from "@/types/keyword-lab";
 import TopicIdeaCard from "./TopicIdeaCard";
 import {
-    AlertCircle, List, TrendingUp, Sparkles, Lightbulb, Wrench,
+    List, TrendingUp, Sparkles, Lightbulb, Wrench,
     Target, LayoutTemplate, Zap, Code, FileText
 } from "lucide-react";
 
@@ -13,25 +13,68 @@ interface ClusterResultsProps {
     seedKeyword: string;
 }
 
+// Each tab carries its own icon + a plain-English, benefit-first description.
+// The description swaps dynamically with the active tab (see info banner below).
 const TABS = [
-    { id: "topics", label: "Topic Ideas", icon: Lightbulb },
-    { id: "seo", label: "SEO Opportunities", icon: TrendingUp },
-    { id: "clusters", label: "Clusters", icon: List },
-    { id: "ai", label: "AI Overviews", icon: Sparkles },
-    { id: "tactics", label: "Tactical Tips", icon: Wrench },
+    {
+        id: "topics",
+        label: "Topic Ideas",
+        icon: Lightbulb,
+        description:
+            "These are ready-to-write article ideas built from your keyword. Pick the one you like and we'll hand it straight to the AI writer — no blank page, no guesswork.",
+    },
+    {
+        id: "seo",
+        label: "SEO Opportunities",
+        icon: TrendingUp,
+        description:
+            "These are the exact search terms worth chasing. Each card shows how hard it is to rank and the best way to write it, so you can spot the easy wins at a glance.",
+    },
+    {
+        id: "clusters",
+        label: "Keyword Clusters",
+        icon: List,
+        description:
+            "This is your topic map — all the related things people type into Google around your keyword, grouped by what they actually want. Cover these and Google starts treating you as the expert.",
+    },
+    {
+        id: "ai",
+        label: "AI Overviews",
+        icon: Sparkles,
+        description:
+            "These are the terms most likely to land you inside Google's AI answer at the very top of the page — and we tell you why. Show up here and people see you first, before they scroll.",
+    },
+    {
+        id: "tactics",
+        label: "Tactical Tips",
+        icon: Wrench,
+        description:
+            "These are hands-on moves you can do today to climb the rankings. Real actions, sorted by type — less theory, more \"here's your next step.\"",
+    },
 ];
 
 export default function ClusterResults({ data, seedKeyword }: ClusterResultsProps) {
     const [activeTab, setActiveTab] = useState(TABS[0].id);
 
+    // Resolve the active tab so the info banner can show its icon + description.
+    const activeTabData = TABS.find((tab) => tab.id === activeTab) ?? TABS[0];
+    const ActiveIcon = activeTabData.icon;
+
     return (
         <div className="w-full space-y-6 animate-in fade-in duration-500">
-            {/* Anti-Hallucination Disclaimer */}
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 flex items-start gap-3 shadow-sm">
-                <AlertCircle className="text-amber-600 dark:text-amber-500 mt-0.5 flex-shrink-0" size={20} />
-                <p className="text-sm text-amber-800 dark:text-amber-300">
-                    <strong className="font-semibold">Stratejik Not:</strong> Listelenen veriler semantik analiz ve SEO niyet tahminine dayanır. Gerçek arama hacimlerini ve rekabet metriklerini doğrulamak için Google Search Console veya Ahrefs gibi araçları kullanmanız önerilir.
-                </p>
+            {/* Dynamic, tab-aware explainer (replaces the old static disclaimer) */}
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl p-4 flex items-start gap-3 shadow-sm transition-colors">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/40 rounded-lg text-blue-600 dark:text-blue-400 flex-shrink-0 shadow-inner">
+                    <ActiveIcon size={18} />
+                </div>
+                <div>
+                    <strong className="block text-sm font-semibold text-blue-900 dark:text-blue-200 mb-0.5">
+                        {activeTabData.label}
+                    </strong>
+                    <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
+                        {activeTabData.description}
+                    </p>
+                </div>
             </div>
 
             {/* Tabs Navigation */}
@@ -119,7 +162,7 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                                     <Sparkles size={20} />
                                 </div>
                                 <div>
-                                    <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5">{item.keyword}</h5>
+                                    <h5 className="font-bold text-gray-900 dark:text-white text-base mb-1.5 capitalize">{item.keyword}</h5>
                                     <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">{item.reason}</p>
                                 </div>
                             </div>

@@ -24,17 +24,20 @@ export default function TopicIdeaCard({ idea, seedKeyword }: TopicIdeaCardProps)
                         {idea.format}
                     </span>
                 </div>
-                <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3 line-clamp-2">
+                {/* Full title — no truncation, wraps to as many lines as needed */}
+                <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3">
                     {idea.title}
                 </h4>
                 <div className="space-y-2 mb-6">
                     <div className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
                         <Target size={16} className="mt-0.5 flex-shrink-0" />
-                        <span className="line-clamp-1"><strong className="font-medium">Audience:</strong> {idea.targetAudience}</span>
+                        {/* Full audience line */}
+                        <span><strong className="font-medium">Audience:</strong> {idea.targetAudience}</span>
                     </div>
                     <div className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
                         <FileText size={16} className="mt-0.5 flex-shrink-0" />
-                        <span className="line-clamp-2"><strong className="font-medium">Angle:</strong> {idea.angle}</span>
+                        {/* Full angle sentence — shown in full, no clamp */}
+                        <span><strong className="font-medium">Angle:</strong> {idea.angle}</span>
                     </div>
                 </div>
             </div>
