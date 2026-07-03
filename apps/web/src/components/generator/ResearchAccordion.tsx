@@ -14,22 +14,63 @@ interface ResearchAccordionProps {
     onCompleteResearch: (data: ResearchResultData) => void;
 }
 
+// Each step carries a plain-English description shown under its heading once
+// the step is complete, so the user understands what they are looking at and
+// what they can do with it (select / deselect, etc.).
 const RESEARCH_STEPS = [
-    { id: "intent", label: "Decoding Search Intent", icon: Target },
-    { id: "keywords", label: "Expanding Keywords", icon: Search },
-    { id: "serp", label: "Analyzing SERP", icon: LinkIcon },
-    { id: "questions", label: "Finding Questions", icon: HelpCircle },
-    { id: "gaps", label: "Finding Gaps", icon: Layers },
-    { id: "outline", label: "Building Outline", icon: FileText },
+    {
+        id: "intent",
+        label: "Decoding Search Intent",
+        icon: Target,
+        description:
+            "This is what people are really after when they search this term — learning, comparing, or ready to buy. We aim the whole article at matching it.",
+    },
+    {
+        id: "keywords",
+        label: "Expanding Keywords",
+        icon: Search,
+        description:
+            "These are the related terms we'll work into your article so it ranks for more than just your main keyword. Tap any term to add or drop it — only the highlighted ones get used.",
+    },
+    {
+        id: "serp",
+        label: "Top-Ranking Content",
+        icon: LinkIcon,
+        description:
+            "These are the pages already winning the top spots for this search. We study them so yours can do better. Keep the ones worth referencing and drop the rest.",
+    },
+    {
+        id: "questions",
+        label: "Questions People Ask",
+        icon: HelpCircle,
+        description:
+            "These are the real questions people ask around this topic. Covering them helps you show up in Google's \"People Also Ask\" box.",
+    },
+    {
+        id: "gaps",
+        label: "Finding Gaps",
+        icon: Layers,
+        description:
+            "These are angles the top pages barely touch — your chance to say something they didn't. Pick the one or two you want your article to own.",
+    },
+    {
+        id: "outline",
+        label: "Building Outline",
+        icon: FileText,
+    },
 ];
 
 const STEP_INTERVAL_MS = 1400; // Time between visual step advances
+const MAX_GAPS = 2; // A focused article should own only 1–2 gaps, not all of them
 
 export default function ResearchAccordion({ config, onCompleteResearch }: ResearchAccordionProps) {
     const [activeStepIndex, setActiveStepIndex] = useState(0);
     const [completedSteps, setCompletedSteps] = useState<string[]>([]);
     const [data, setData] = useState<ResearchResultData | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    // Selected content-gap indices (kept separate so `data.gaps` stays string[]).
+    const [selectedGaps, setSelectedGaps] = useState<number[]>([]);
 
     // Prevent double-fire in React Strict Mode and re-renders
     const fetchLock = useRef(false);
@@ -75,6 +116,9 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                 }
 
                 setData(apiData);
+                // Pre-select up to the first MAX_GAPS gaps so the pipeline always
+                // has a focused default even if the user doesn't interact.
+                setSelectedGaps((apiData.gaps ?? []).slice(0, MAX_GAPS).map((_: string, i: number) => i));
             } catch (err: any) {
                 if (!isMounted) return;
                 console.error("[RESEARCH_ACCORDION_ERROR]", err);
@@ -87,6 +131,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                     questions: [],
                     gaps: [],
                 } as any);
+                setSelectedGaps([]);
             }
         };
 
@@ -119,7 +164,11 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
     const handleProceed = () => {
         if (!data || completedFired.current) return;
         completedFired.current = true;
-        onCompleteResearch(data);
+
+        // Emit only the gaps the user chose, still as a plain string[] so the
+        // downstream orchestrate route contract is unchanged.
+        const chosenGaps = (data.gaps ?? []).filter((_: string, i: number) => selectedGaps.includes(i));
+        onCompleteResearch({ ...data, gaps: chosenGaps });
     };
 
     // ── Keyword / Competitor toggles ─────────────────────────────────────────
@@ -141,6 +190,15 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                 c.id === id ? { ...c, selected: !c.selected } : c
             );
             return { ...prev, competitors };
+        });
+    };
+
+    // Toggle a content gap, enforcing the MAX_GAPS cap (ignore clicks past it).
+    const toggleGap = (index: number) => {
+        setSelectedGaps((prev) => {
+            if (prev.includes(index)) return prev.filter((i) => i !== index);
+            if (prev.length >= MAX_GAPS) return prev;
+            return [...prev, index];
         });
     };
 
@@ -221,6 +279,13 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                             {/* Step content — only show for completed steps with data */}
                             {isCompleted && data && (
                                 <div className="px-6 py-4">
+                                    {/* Plain-English explainer for this section */}
+                                    {step.description && (
+                                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
+                                            {step.description}
+                                        </p>
+                                    )}
+
                                     {step.id === "intent" && (
                                         <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
                                             {data.intent}
@@ -285,15 +350,33 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                     )}
 
                                     {step.id === "gaps" && (data.gaps?.length ?? 0) > 0 && (
-                                        <div className="flex flex-wrap gap-2">
-                                            {(data.gaps ?? []).map((gap: string, i: number) => (
-                                                <span
-                                                    key={i}
-                                                    className="px-3 py-1.5 rounded-md bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 text-sm font-medium border border-purple-200 dark:border-purple-800"
-                                                >
-                                                    {gap}
-                                                </span>
-                                            ))}
+                                        <div className="space-y-3">
+                                            <div className="flex flex-wrap gap-2">
+                                                {(data.gaps ?? []).map((gap: string, i: number) => {
+                                                    const isSelected = selectedGaps.includes(i);
+                                                    const capReached = (selectedGaps.length ?? 0) >= MAX_GAPS;
+                                                    return (
+                                                        <button
+                                                            key={i}
+                                                            onClick={() => toggleGap(i)}
+                                                            disabled={!isSelected && capReached}
+                                                            className={cn(
+                                                                "px-3 py-1.5 rounded-md text-sm font-medium border transition-colors",
+                                                                isSelected
+                                                                    ? "bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-900/40 dark:text-purple-200 dark:border-purple-700"
+                                                                    : capReached
+                                                                        ? "bg-gray-50 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed dark:bg-gray-800 dark:text-gray-500 dark:border-gray-700"
+                                                                        : "bg-white text-purple-700 border-purple-200 hover:bg-purple-50 dark:bg-gray-900 dark:text-purple-300 dark:border-purple-800 dark:hover:bg-purple-900/20"
+                                                            )}
+                                                        >
+                                                            {gap}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-gray-400 dark:text-gray-500">
+                                                Pick up to {MAX_GAPS} to focus your article ({selectedGaps.length}/{MAX_GAPS} selected).
+                                            </p>
                                         </div>
                                     )}
 
