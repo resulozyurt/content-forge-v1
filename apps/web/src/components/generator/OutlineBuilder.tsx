@@ -13,7 +13,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
     GripVertical, Trash2, ListTree, FileText, CheckCircle2,
-    Sparkles, Loader2, PlusCircle, RefreshCw, Pencil, Check, X,
+    Sparkles, Loader2, RefreshCw, Pencil, Check, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, ResearchResultData, GeneratorConfigData } from "@/types/generator";
@@ -268,7 +268,7 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                         <ListTree className="w-6 h-6 text-indigo-500" /> Outline Architect
                     </h2>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                        Build your structure. <span className="text-indigo-500 font-medium">Double-click</span> any heading to edit it inline.
+                        Click <span className="text-indigo-500 font-medium">AI Draft Outline</span> to generate an outline with AI, or <span className="text-indigo-500 font-medium">double-click</span> any heading to add a new heading manually.
                     </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -280,8 +280,8 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                         {isAIGenerating ? <Loader2 className="w-4 h-4 animate-spin" />
                             : myOutline.length > 0 ? <RefreshCw className="w-4 h-4" />
                                 : <Sparkles className="w-4 h-4" />}
-                        {isAIGenerating ? "Synthesizing..."
-                            : myOutline.length > 0 ? "Regenerate (New Angle)"
+                        {isAIGenerating ? "Generating Outline..."
+                            : myOutline.length > 0 ? "Generate a New Outline"
                                 : "AI Draft Outline"}
                     </button>
                     <div className="flex items-center gap-2 bg-indigo-50 dark:bg-indigo-900/20 px-4 py-2 rounded-lg border border-indigo-100 dark:border-indigo-800/50 text-sm font-bold text-indigo-700 dark:text-indigo-400">
@@ -300,7 +300,7 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm flex flex-col h-[700px]">
                     <div className="p-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
                         <h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                            <FileText className="w-5 h-5 text-blue-500" /> SERP Topologies
+                            <FileText className="w-5 h-5 text-blue-500" /> Competitor Outlines
                         </h3>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -311,8 +311,9 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                                 </h4>
                                 <div className="space-y-1 pl-2">
                                     {comp.headings?.map((heading: any, hIdx: number) => (
-                                        <button key={hIdx} onClick={() => handleAddFromCompetitor(heading)}
-                                            className="w-full flex items-start gap-3 p-2 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50 dark:hover:border-blue-900/50 dark:hover:bg-blue-900/20 text-left transition-colors group">
+                                        <button key={hIdx} onDoubleClick={() => handleAddFromCompetitor(heading)}
+                                            title="Double-click to add"
+                                            className="w-full flex items-start gap-3 p-2 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50 dark:hover:border-blue-900/50 dark:hover:bg-blue-900/20 text-left transition-colors group cursor-pointer">
                                             <span className={cn(
                                                 "font-bold uppercase tracking-wider text-[10px] py-1 px-2 rounded w-8 text-center flex-shrink-0 mt-0.5",
                                                 heading.level === "h2" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400"
@@ -324,7 +325,6 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
                                             <span className="flex-1 text-sm text-gray-600 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white transition-colors">
                                                 {heading.text}
                                             </span>
-                                            <PlusCircle size={13} className="text-blue-400 opacity-0 group-hover:opacity-100 flex-shrink-0 mt-1 transition-opacity" />
                                         </button>
                                     ))}
                                 </div>
