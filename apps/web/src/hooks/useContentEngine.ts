@@ -1,6 +1,6 @@
 // apps/web/src/hooks/useContentEngine.ts
 import { useState } from "react";
-import { OutlineHeading } from "@/types/generator";
+import { OutlineHeading, ImageConfig } from "@/types/generator";
 
 export type EngineStatus =
   | "IDLE"
@@ -26,6 +26,8 @@ interface GenerationParams {
   // Forwarded from ResearchAccordion — PAA questions and content gaps
   questions?: string[];
   gaps?: string[];
+  // Faz 5: global image plan (toggle + style). Absent → images stay on (writer default).
+  imageConfig?: ImageConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +185,7 @@ export function useContentEngine() {
     selectedKeywords,
     questions = [],
     gaps = [],
+    imageConfig,
   }: GenerationParams) => {
     try {
       setStatus("RESEARCHING");
@@ -313,6 +316,9 @@ export function useContentEngine() {
               narrativeThread,
               storySpine,
               uniqueAngle,
+              // Faz 5: writer reads this to gate placeholder + imagePrompt.
+              // Absent → writer keeps images on with its default style.
+              imageConfig,
             },
             sectionPlan: {
               ...section,

@@ -66,7 +66,21 @@ export interface FinalOutlineData {
   selectedKeywords: string[];
   sourceUrls?: string[];
   config?: GeneratorConfigData;
+  // Faz 5: global image toggle + editable style guidance (set in the Image step)
+  imageConfig?: ImageConfig;
 }
+
+// Faz 5 — single global image plan for the whole article.
+// enabled=false → no images are generated anywhere in the article.
+export interface ImageConfig {
+  enabled: boolean;
+  styleGuidance: string;
+}
+
+export const defaultImageConfig: ImageConfig = {
+  enabled: true,
+  styleGuidance: 'Professional DSLR photo, natural lighting, no text',
+};
 
 export type ContentBlockType = 'h2' | 'h3' | 'paragraph' | 'image' | 'seo_metadata';
 

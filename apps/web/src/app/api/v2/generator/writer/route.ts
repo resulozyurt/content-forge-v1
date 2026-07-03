@@ -292,6 +292,15 @@ export async function POST(req: NextRequest) {
     const nextTitle: string|null     = sectionPlan.nextSectionTitle || null;
     const prevSectionSummary: string|null = sectionPlan.prevSectionSummary || null;
 
+    // ── Image config (Faz 5): single global toggle + editable style guidance ──
+    // Threaded via researchBlueprint (article-level). Backward compatible: if
+    // absent, images stay ON with the default style — i.e. prior behavior.
+    const imageConfig = researchBlueprint.imageConfig || {};
+    const imagesEnabled: boolean = imageConfig.enabled !== false;
+    const imageStyleGuidance: string =
+      (imageConfig.styleGuidance || "").trim() ||
+      "Professional DSLR photo, natural lighting, no text";
+
     // Detect if heading promises a numbered list (e.g. "5 Myths", "7 Steps", "3 Types")
     const numberedHeadingMatch = sectionPlan.title.match(/(\d+)\s+(myth|step|way|strateg|tip|reason|sign|mistake|lesson|factor|tool|question|example|benefit|advantage|type|kind|method|approach|technique|stage|phase|component|element)/i);
     const promisedCount: number | null = numberedHeadingMatch ? parseInt(numberedHeadingMatch[1], 10) : null;
@@ -545,9 +554,12 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     generatedHtml = closeUnclosedHtmlTags(generatedHtml);
 
     // ── Image — 1-4-7 rule + async decoupling ─────────────────────────
-    const shouldGenerateImage = sectionIndex % 3 === 0;
+    // Faz 5: also gated by the global image toggle. When images are disabled,
+    // no placeholder <figure> and no imagePrompt are emitted, so useContentEngine
+    // never calls image-generate for this article.
+    const shouldGenerateImage = imagesEnabled && sectionIndex % 3 === 0;
     const imagePrompt = shouldGenerateImage
-      ? `Professional DSLR photo: ${sectionPlan.title} — ${keyword}. Natural lighting, no text.`.slice(0, 480)
+      ? `${imageStyleGuidance}. Subject: ${sectionPlan.title} — ${keyword}.`.slice(0, 480)
       : null;
 
     const imgHtml = shouldGenerateImage

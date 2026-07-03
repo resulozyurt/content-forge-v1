@@ -164,6 +164,8 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
             selectedKeywords,
             questions,
             gaps,
+            // Faz 5: global image plan (toggle + style) set in the Image step.
+            imageConfig: outlineData.imageConfig,
         });
 
         return () => { executionLock.current = false; };

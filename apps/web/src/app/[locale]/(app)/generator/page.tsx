@@ -5,16 +5,18 @@ import { useState, Suspense } from "react";
 import GeneratorConfig from "@/components/generator/GeneratorConfig";
 import ResearchAccordion from "@/components/generator/ResearchAccordion";
 import OutlineBuilder from "@/components/generator/OutlineBuilder";
+import ImageStep from "@/components/generator/ImageStep";
 import LiveGeneration from "@/components/generator/LiveGeneration";
 import ProseEditor from "@/components/generator/ProseEditor";
 import {
     GeneratorConfigData,
     ResearchResultData,
     FinalOutlineData,
-    GeneratedBlock
+    GeneratedBlock,
+    ImageConfig
 } from "@/types/generator";
 
-type GenerationStage = 'config' | 'research' | 'outline' | 'writing' | 'editor';
+type GenerationStage = 'config' | 'research' | 'outline' | 'image' | 'writing' | 'editor';
 
 export default function GeneratorPage() {
     const [currentStage, setCurrentStage] = useState<GenerationStage>('config');
@@ -35,6 +37,12 @@ export default function GeneratorPage() {
 
     const handleGenerateArticle = (finalData: FinalOutlineData) => {
         setFinalOutline(finalData);
+        setCurrentStage('image');
+    };
+
+    const handleConfirmImages = (imageConfig: ImageConfig) => {
+        // Merge the global image plan into the outline that drives generation.
+        setFinalOutline((prev) => (prev ? { ...prev, imageConfig } : prev));
         setCurrentStage('writing');
     };
 
@@ -69,6 +77,15 @@ export default function GeneratorPage() {
                         researchData={researchData}
                         activeConfig={activeConfig}
                         onGenerateArticle={handleGenerateArticle}
+                    />
+                </div>
+            )}
+
+            {currentStage === 'image' && finalOutline && (
+                <div className="pt-8">
+                    <ImageStep
+                        initialConfig={finalOutline.imageConfig}
+                        onConfirm={handleConfirmImages}
                     />
                 </div>
             )}
