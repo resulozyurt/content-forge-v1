@@ -1,6 +1,7 @@
 // apps/web/src/hooks/useContentEngine.ts
 import { useState } from "react";
 import { OutlineHeading, ImageConfig } from "@/types/generator";
+import { normalizeLanguage } from "@/lib/language";
 
 export type EngineStatus =
   | "IDLE"
@@ -20,7 +21,7 @@ export interface SeoMetadata {
 
 interface GenerationParams {
   keyword: string;
-  targetLanguage: "en-US" | "tr-TR" | "es-ES";
+  targetLanguage: "en-US" | "tr-TR";
   userHeadings: OutlineHeading[];
   selectedKeywords: string[];
   // Forwarded from ResearchAccordion — PAA questions and content gaps
@@ -246,7 +247,7 @@ export function useContentEngine() {
         /\b(conclusion|summary|wrap.?up|sonuç|özet|son\s|kapanış)\b/.test(lastTitle);
 
       if (!hasConclusion) {
-        const isTr = targetLanguage.toLowerCase().includes("tr");
+        const isTr = normalizeLanguage(targetLanguage).isTurkish;
         const conclusionTitle = isTr ? "Sonuç ve Öneriler" : "Conclusion";
         const conclusionSection = {
           title: conclusionTitle,

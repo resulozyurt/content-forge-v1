@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -12,8 +13,9 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { researchBlueprint } = await req.json();
-    const language: string = researchBlueprint.language || "en-US";
-    const isTurkish = language.toLowerCase().includes("tr");
+    // Canonical label ("English (US)" / "Türkçe (TR)") — every ${language}
+    // slot in the prompt below now resolves to the single source of truth.
+    const language: string = normalizeLanguage(researchBlueprint.language).label;
 
     const systemPrompt = `You are an expert SEO Content Architect. Create a comprehensive article outline for: "${researchBlueprint.keyword}".
 TARGET LANGUAGE: ${language}

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -51,12 +52,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized access." }, { status: 401 });
     }
 
-    const { researchData, topic, language, config, brandName, brandDesc, previousHeadings } =
+    const { researchData, topic, language: rawLanguage, config, brandName, brandDesc, previousHeadings } =
       await req.json();
 
     if (!researchData || !topic) {
       return NextResponse.json({ error: "Missing research data or topic." }, { status: 400 });
     }
+
+    // Canonical target language — independent of whatever string format the
+    // caller sent. Every ${language} interpolation below now resolves to the
+    // single source of truth, so AI-drafted headings can't drift languages.
+    const language = normalizeLanguage(rawLanguage).label;
 
     // ── Intent detection — drives structure decisions ──────────────────────
     const { intent, maxH2, allowDeepH3, depthLabel } = detectSearchIntent(topic);

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -158,9 +159,10 @@ function getFormatInstruction(
 }
 
 function getLangRule(language: string): string {
-  return language.toLowerCase().includes("tr")
-    ? "LANGUAGE: Fluent natural Turkish. No translation artifacts."
-    : "LANGUAGE: Native American English. Active voice, direct, confident.";
+  // Hard, heading-overriding language directive from the single source of
+  // truth. Returning promptRule (not a soft one-liner) is what stops a
+  // foreign-language section title from dragging the body into that language.
+  return normalizeLanguage(language).promptRule;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +175,7 @@ function getLangRule(language: string): string {
 async function generateLeadSummary(
   keyword: string, articleTitle: string, sections: string[], language: string
 ): Promise<string> {
-  const isTr = language.toLowerCase().includes("tr");
+  const isTr = normalizeLanguage(language).isTurkish;
 
   const sectionCount = sections.length;
   const estWords     = sectionCount * 250;
@@ -207,7 +209,7 @@ RULES:
 - bullets: 3 items minimum, 4 maximum. Each must cover a DIFFERENT angle.
 - hook must include a real number, %, or multiplier.
 - bottomLine must NOT restate the hook.
-- All text in ${language}.` }],
+${getLangRule(language)}` }],
   });
 
   const block = res.content.find((b): b is Anthropic.TextBlock => b.type === "text");
@@ -529,7 +531,7 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-6", max_tokens: sectionMaxTokens,
       system: systemPrompt,
-      messages: [{ role: "user", content: `Write HTML for: "${sectionPlan.title}"` }],
+      messages: [{ role: "user", content: `Write HTML for: "${sectionPlan.title}"\n\n${getLangRule(language)}` }],
       temperature: 0.4,
     });
 
@@ -591,7 +593,8 @@ Return ONLY the inner HTML. No <h2>. No wrapper div. No code fences.`;
 Write as if ending the section's thought — the next section will continue from here.
 Section title: "${sectionPlan.title}"
 Section content (plain text): ${generatedHtml.replace(/<[^>]+>/g, " ").slice(0, 600)}
-Output ONLY the 2-sentence summary. No labels, no quotes.`,
+Output ONLY the 2-sentence summary. No labels, no quotes.
+${getLangRule(language)}`,
         }],
       });
       const summaryBlock = summaryRes.content.find((b): b is Anthropic.TextBlock => b.type === "text");

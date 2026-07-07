@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -13,10 +14,10 @@ export async function POST(req: NextRequest) {
 
     const { articleTitle, keyword, selectedKeywords, language, contentSample } = await req.json();
 
-    const isTurkish = (language || "").toLowerCase().includes("tr");
-    const langRule = isTurkish
-      ? "Tüm çıktılar akıcı, doğal Türkçe olmalı."
-      : "All output in natural American English.";
+    // Hard language directive from the single source of truth. The content
+    // sample handed to this route can be mixed-language; promptRule explicitly
+    // overrides the source language so the metadata always matches config.
+    const langRule = normalizeLanguage(language).promptRule;
 
     const systemPrompt = `You are an expert SEO strategist specializing in Rank Math optimization.
 ${langRule}

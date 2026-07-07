@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -163,8 +164,7 @@ export async function POST(req: NextRequest) {
 
     // ── Step 2: Generate narrative thread with Claude ──────────────────────
     // One fast call to get the article's story arc — shared context for all sections
-    const isTurkish = language.toLowerCase().includes("tr");
-    const langRule = isTurkish ? "Turkish" : "American English";
+    const langRule = normalizeLanguage(language).isTurkish ? "Turkish" : "American English";
 
     const narrativeRes = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
