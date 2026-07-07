@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     const researchBlueprint = {
       keyword: safeKeyword,
-      language: targetLanguage || "en-US",
+      language: normalizeLanguage(targetLanguage).code,
       brandGuidelines: brandContext,
       selectedKeywords,
       questions,

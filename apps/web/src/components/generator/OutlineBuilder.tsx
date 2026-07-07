@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinalOutlineData, ResearchResultData, GeneratorConfigData } from "@/types/generator";
+import { normalizeLanguage } from "@/lib/language";
 
 type HeadingLevel = "h2" | "h3" | "h4";
 
@@ -184,7 +185,11 @@ export default function OutlineBuilder({ researchData, activeConfig, onGenerateA
         try {
             setIsAIGenerating(true);
             const targetTopic = (researchData as any).topic || researchData.keywords?.[0]?.text || "SEO Topic";
-            const targetLanguage = activeConfig?.language === "tr" ? "Turkish (TR)" : "English (US)";
+            // Canonical language label — same source of truth the rest of the
+            // pipeline uses. Prevents the AI outline from drafting headings in
+            // the wrong language, which was the outline-side entry point for
+            // foreign-language contamination downstream.
+            const targetLanguage = normalizeLanguage(activeConfig?.language).label;
             const targetBrand = activeConfig?.enableBrandVoice ? activeConfig.customBrandName || "" : "";
             const targetBrandDesc = activeConfig?.enableBrandVoice ? activeConfig.customBrandDesc || "" : "";
             const avoidList = Array.from(new Set([...allPreviousHeadings, ...myOutline.map((h) => h.text)]));
