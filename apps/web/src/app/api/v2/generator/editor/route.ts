@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { normalizeLanguage } from "@/lib/language";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -121,6 +122,53 @@ function detectRepetition(html: string, sectionTitle: string): string[] {
   return errors;
 }
 
+// ---------------------------------------------------------------------------
+// LANGUAGE VALIDATION (Fix #3): catches the reported failure where a section
+// silently comes back in the wrong language (most often Spanish, dragged in by
+// a foreign-language competitor heading). This is not full language ID — it
+// only looks for high-signal markers of a language the target can NOT be
+// (target is always en or tr). A hit routes the chunk into the Claude
+// auto-correct path below, which now carries the hard promptRule and rewrites
+// the section into the target language. Thresholds are deliberately
+// conservative to avoid false positives on the odd loanword.
+// ---------------------------------------------------------------------------
+const SPANISH_MARKERS = [
+  "que", "para", "una", "más", "pero", "esta", "este", "también", "según",
+  "además", "porque", "cómo", "qué", "dónde", "por", "sus",
+];
+function detectLanguageMismatch(html: string, isTurkish: boolean, targetLabel: string): string[] {
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase().trim();
+  if (text.length < 40) return []; // too short to judge reliably
+
+  // Unambiguous Spanish punctuation/diacritics weigh heavily; function words
+  // add up on top. Target is only ever English or Turkish, so any strong
+  // Spanish footprint is a mismatch either way.
+  let spanishHits = (text.match(/[¿¡ñ]/g) || []).length;
+  for (const w of SPANISH_MARKERS) {
+    spanishHits += (text.match(new RegExp(`\\b${w}\\b`, "g")) || []).length;
+  }
+  if (spanishHits >= 5) {
+    return [
+      `LANGUAGE MISMATCH: The section body appears to be in the wrong language (Spanish markers detected). Rewrite the ENTIRE section in ${targetLabel}. Preserve every HTML tag, <a> href, and %%FIGURE_N%%/%%IMG_N%% placeholder exactly — translate only the human-readable text.`,
+    ];
+  }
+
+  // Turkish target but zero Turkish signal alongside a clear English footprint
+  // → likely English-when-Turkish.
+  if (isTurkish) {
+    const trHits = (text.match(/[çğışöü]/g) || []).length +
+      (text.match(/\b(ve|bir|bu|için|ile|olarak|daha|gibi|çok)\b/g) || []).length;
+    const enHits = (text.match(/\b(the|and|for|with|that|this|are|your|from|will)\b/g) || []).length;
+    if (trHits === 0 && enHits >= 6) {
+      return [
+        `LANGUAGE MISMATCH: The section is expected in Turkish but appears to be in another language. Rewrite the ENTIRE section in ${targetLabel}, preserving all HTML tags, <a> hrefs, and %%FIGURE_N%%/%%IMG_N%% placeholders.`,
+      ];
+    }
+  }
+
+  return [];
+}
+
 export async function POST(req: NextRequest) {
   let parsedBody: any = {};
 
@@ -130,6 +178,7 @@ export async function POST(req: NextRequest) {
 
     parsedBody = await req.json();
     const { generatedChunk: rawChunk, sectionPlan, language } = parsedBody;
+    const lang = normalizeLanguage(language);
 
     // Guard: malformed or missing chunk — pass through immediately
     if (!rawChunk || typeof rawChunk !== "string" || rawChunk.length < 10) {
@@ -198,6 +247,9 @@ export async function POST(req: NextRequest) {
       validationErrors.push("MISSING CITATION: Add at least one external authority link with target='_blank' rel='nofollow'.");
     }
 
+    // ── Language validation (Fix #3) ─────────────────────────────────────────
+    validationErrors.push(...detectLanguageMismatch(generatedChunk, lang.isTurkish, lang.label));
+
     // ── All checks passed ───────────────────────────────────────────────────
     if (validationErrors.length === 0) {
       return NextResponse.json({ status: "approved", chunk: generatedChunk }, { status: 200 });
@@ -221,10 +273,7 @@ export async function POST(req: NextRequest) {
       return `%%IMG_${extractedImgs.length - 1}%%`;
     });
 
-    const isTurkish = (language || "").toLowerCase().includes("tr");
-    const langRule = isTurkish
-      ? "Output language: Akıcı, doğal Türkçe. Çeviri kokusu olmamalı."
-      : "Output language: Natural, native American English. Direct and confident tone.";
+    const langRule = lang.promptRule;
 
     const correctionPrompt = `You are a strict HTML Content Editor. Fix ALL the listed errors in the draft HTML.
 
