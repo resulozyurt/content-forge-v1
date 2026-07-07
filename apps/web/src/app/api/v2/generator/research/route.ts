@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next"; // DÜZELTİLDİ
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@contentforge/database";
+import { normalizeLanguage } from "@/lib/language";
 
 export async function POST(req: NextRequest) {
   try {
