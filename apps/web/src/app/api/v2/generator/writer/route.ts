@@ -480,7 +480,15 @@ Do NOT write: "In the next section we will..." — instead, end with an insight 
 - Integrate data into your argument: WRONG: "According to CMU, 80% of costs are locked in preconstruction." RIGHT: "Over 80% of a project's final cost is locked in before ground is broken — which is why most cost control efforts arrive too late."
 - Source attribution in parentheses after the insight, not as the sentence opener`,
 
-      `[VOICE]: Write as an experienced practitioner talking to a peer — not as a researcher citing literature. Be direct, specific, and opinionated. Avoid hedging language like "it can be argued that" or "research suggests".`,
+      `[READABILITY — HARD TARGET: Flesch Reading Ease 60+]:
+- Average sentence length: 12–15 words. Mix short (5–8 word) sentences between longer ones.
+- One idea per sentence. If a sentence needs a comma-chain, split it in two.
+- Prefer 1–2 syllable words: "use" not "utilize", "help" not "facilitate", "fix" not "remediate", "start" not "implement", "show" not "demonstrate".
+- Industry terms the reader searches for (the keyword itself) are fine — but explain them in plain words, and never stack 3+ multi-syllable words in one sentence.
+- Active voice. "Teams lose 30% of stock" — not "30% of stock is lost by teams".
+- Zero filler: "in order to" → "to", "due to the fact that" → "because".`,
+
+      `[VOICE]: Write as an experienced practitioner talking to a peer — not as a researcher citing literature. Be direct, specific, and opinionated. Avoid hedging language like "it can be argued that" or "research suggests". Plain language is NOT dumbed-down language — keep the expertise, drop the jargon.`,
 
       assignedPAA ? `[PAA ANSWER]: Directly answer within the first 2 sentences (featured snippet format): "${assignedPAA}"` : "",
       contentGap ? `[COMPETITOR GAP — EXPLOIT THIS]: No competitor covers this angle — make it central to this section: "${contentGap}"` : "",
@@ -498,11 +506,12 @@ ${getLangRule(language)}
 ════════ CONTENT RULES ════════
 1. RAW HTML ONLY — No Markdown.
 2. NO <h2> — System adds the heading.
-3. BREVITY — Each <p>: MAX ${Math.min(sectionPlan.maxParagraphSentences || 2, 2)} sentences, max 20 words each.
+3. BREVITY — Each <p>: MAX ${Math.min(sectionPlan.maxParagraphSentences || 2, 2)} sentences. Sentences average 12–15 words; NEVER exceed 20 words.
 4. NO REPETITION — Don't restate the section title in sentence 1. Never open with the title in italic or bold.
 5. REAL DATA — At least one specific number, %, or $.
 6. INLINE STYLES ONLY — All style="" with double quotes.
 7. RICH FORMAT — Use the format instruction below. Tables, bullets, blockquotes, and H3s make content scannable and valuable. DO NOT flatten everything into paragraphs.
+8. PLAIN LANGUAGE — Prefer short, common words. Write for a smart 8th grader (Flesch Reading Ease 60+).
 ═══════════════════════════════
 
 ${getContentTypeInstruction(contentType)}

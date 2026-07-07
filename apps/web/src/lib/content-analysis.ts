@@ -1,4 +1,22 @@
 // apps/web/src/lib/content-analysis.ts
+//
+// READABILITY FIX (v2): the previous analyzer computed Flesch over the ENTIRE
+// stripped HTML — headings, table cells, figcaptions, Key-Takeaways card
+// labels and "By the Numbers" callouts were all glued into the text stream.
+// Most of those fragments carry no terminal punctuation, so they merged with
+// the following text into giant pseudo-sentences and artificially inflated
+// avg-sentence-length (and tanked the Flesch score) no matter how well the
+// writer agent performed.
+//
+// v2 measures readability over PROSE UNITS ONLY:
+//   - text inside <p> and <li> blocks (what a human actually reads as prose)
+//   - tables, figcaptions, <cite> and headings are excluded from readability
+//     (they still count toward wordCount/charCount/readingTime, matching the
+//     panel's "Words" stat)
+//   - each <li> is its own sentence boundary — bullets never merge with the
+//     next paragraph anymore
+//   - sentence split protects decimals ("3.5") and only breaks before a
+//     capital/digit, mirroring the editor agent's segmentation
 
 export interface ContentStats {
   readingTime: number;
@@ -29,11 +47,12 @@ export interface KeywordDensityResult {
 }
 
 const countSyllables = (word: string): number => {
-  word = word.toLowerCase();
+  word = word.toLowerCase().replace(/[^a-zçğıöşü]/g, '');
+  if (word.length === 0) return 1;
   if (word.length <= 3) return 1;
   word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
   word = word.replace(/^y/, '');
-  const syllables = word.match(/[aeiouy]{1,2}/g);
+  const syllables = word.match(/[aeiouyçğıöşü]{1,2}/g);
   return syllables ? syllables.length : 1;
 };
 
@@ -46,21 +65,83 @@ const stripHtml = (html: string): string => {
     .trim();
 };
 
+// ---------------------------------------------------------------------------
+// Prose extraction for readability scoring.
+// Returns an array of prose "units" — each unit is the plain text of one
+// <p> or <li> block. Tables, figcaptions and cites are removed BEFORE
+// extraction so their cell/caption text never leaks into a prose unit.
+// ---------------------------------------------------------------------------
+const extractProseUnits = (html: string): string[] => {
+  const cleaned = html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<table[\s\S]*?<\/table>/gi, ' ')
+    .replace(/<figcaption[\s\S]*?<\/figcaption>/gi, ' ')
+    .replace(/<cite[\s\S]*?<\/cite>/gi, ' ');
+
+  const units: string[] = [];
+  const blockRegex = /<(p|li)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = blockRegex.exec(cleaned)) !== null) {
+    const inner = match[2];
+    // Skip container <li> that wraps <p> blocks — the inner <p> is matched
+    // separately; counting both would double the text.
+    if (/<p[\s>]/i.test(inner)) continue;
+
+    const text = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Skip labels/badges ("✦ Key Takeaways · 7 min read", nav chips, etc.) —
+    // fragments under 4 words are UI furniture, not prose.
+    if (text.split(/\s+/).filter(Boolean).length < 4) continue;
+
+    units.push(text);
+  }
+
+  return units;
+};
+
+// Split one prose unit into sentences. Decimal-safe: only breaks after
+// terminal punctuation followed by whitespace + capital/digit/quote.
+const splitSentences = (unit: string): string[] => {
+  return unit
+    .split(/(?<=[.!?…])\s+(?=[A-Z0-9ÇĞİÖŞÜ"'"'])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+};
+
 export const analyzeContent = (html: string, brandDomain: string = ""): ContentStats => {
   const text = stripHtml(html);
   const words = text.split(/\s+/).filter(w => w.length > 0);
   const wordCount = words.length;
   const charCount = text.replace(/\s/g, '').length;
-  
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-  const sentenceCount = sentences.length > 0 ? sentences.length : 1;
-  const sentenceLength = wordCount / sentenceCount;
 
-  const totalSyllables = words.reduce((acc, word) => acc + countSyllables(word), 0);
-  
+  // ── Readability: prose units only ────────────────────────────────────────
+  const proseUnits = extractProseUnits(html);
+
+  let proseWords: string[] = [];
+  let sentenceCount = 0;
+
+  if (proseUnits.length > 0) {
+    for (const unit of proseUnits) {
+      const sentences = splitSentences(unit);
+      sentenceCount += Math.max(1, sentences.length);
+      proseWords = proseWords.concat(unit.split(/\s+/).filter((w) => w.length > 0));
+    }
+  } else {
+    // Fallback (plain text / no p-li markup): old whole-text behavior.
+    proseWords = words;
+    sentenceCount = text.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
+  }
+
+  sentenceCount = Math.max(1, sentenceCount);
+  const proseWordCount = Math.max(1, proseWords.length);
+  const sentenceLength = proseWordCount / sentenceCount;
+
+  const totalSyllables = proseWords.reduce((acc, word) => acc + countSyllables(word), 0);
+
   let fleschScore = 0;
-  if (wordCount > 0) {
-    fleschScore = 206.835 - 1.015 * (wordCount / sentenceCount) - 84.6 * (totalSyllables / wordCount);
+  if (proseWordCount > 0) {
+    fleschScore = 206.835 - 1.015 * sentenceLength - 84.6 * (totalSyllables / proseWordCount);
   }
   fleschScore = Math.max(0, Math.min(100, Math.round(fleschScore)));
 
@@ -123,14 +204,14 @@ export const analyzeKeywordDensity = (html: string, keywords: string[]): Keyword
 
   const results = uniqueKeywords.map(keyword => {
     const kwLower = keyword.toLowerCase();
-    
+
     // Güvenli regex escape işlemi
     const escapedKw = kwLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`\\b${escapedKw}\\b`, 'gi');
     const occurrences = (text.match(regex) || []).length;
-    
+
     const density = (occurrences / totalWords) * 100;
-    
+
     let densityStatus: 'optimal' | 'low' | 'high' = 'low';
     if (density >= 0.5 && density <= 2.5) densityStatus = 'optimal';
     else if (density > 2.5) densityStatus = 'high';
