@@ -36,41 +36,43 @@ function SendToGeneratorButton({ seedKeyword, keyword }: { seedKeyword: string; 
 
 // Each tab carries its own icon + a plain-English, benefit-first description.
 // The description swaps dynamically with the active tab (see info banner below).
+// Each description answers three things for a first-time user: what am I looking
+// at, how is this tab different from the others, and what should I do next.
 const TABS = [
     {
         id: "topics",
         label: "Topic Ideas",
         icon: Lightbulb,
         description:
-            "These are ready-to-write article ideas built from your keyword. Pick the one you like and we'll hand it straight to the AI writer — no blank page, no guesswork.",
+            "Complete article concepts, ready to write. Each card gives you a working title, the audience it's written for, and a fresh angle that sets it apart from what's already out there. Like one? Hit \"Send to AI Generator\" and it becomes a full draft.",
     },
     {
         id: "seo",
         label: "SEO Opportunities",
         icon: TrendingUp,
         description:
-            "These are the exact search terms worth chasing. Each card shows how hard it is to rank and the best way to write it, so you can spot the easy wins at a glance.",
+            "Specific search phrases you have a real shot at ranking for. Each card shows a keyword variation, how stiff the competition is, and the content format that works best for it. Start with the green low-competition cards — those are your quickest wins.",
     },
     {
         id: "clusters",
         label: "Keyword Clusters",
         icon: List,
         description:
-            "This is your topic map — all the related things people type into Google around your keyword, grouped by what they actually want. Cover these and Google starts treating you as the expert.",
+            "The full map of what people search around your keyword. Each term is tagged by intent: informational means they want to learn, commercial means they're comparing options, and transactional means they're ready to buy. Use this to decide which searchers to go after first.",
     },
     {
         id: "ai",
         label: "AI Overviews",
         icon: Sparkles,
         description:
-            "These are the terms most likely to land you inside Google's AI answer at the very top of the page — and we tell you why. Show up here and people see you first, before they scroll.",
+            "Google now answers many searches with an AI-written summary above the regular results. These are the searches in your topic most likely to trigger one — with the reason why. Create content for them and you can get cited in that box, above even the #1 ranking.",
     },
     {
         id: "tactics",
         label: "Tactical Tips",
         icon: Wrench,
         description:
-            "These are hands-on moves you can do today to climb the rankings. Real actions, sorted by type — less theory, more \"here's your next step.\"",
+            "Not keywords — this is your to-do list. Concrete improvements to make on your site, grouped into three types: on-page (your content), technical (your site's setup), and AI optimization (getting picked up by AI search). Check items off to help everything else here rank better.",
     },
 ];
 
