@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { normalizeLanguage } from "@/lib/language";
+import { getContentTypeInstruction } from "@/lib/content-types";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -274,6 +275,7 @@ export async function POST(req: NextRequest) {
     const { researchBlueprint, sectionPlan, sectionIndex, allSectionTitles } = await req.json();
     const language: string           = researchBlueprint.language || "en-US";
     const keyword: string            = researchBlueprint.keyword || "Topic";
+    const contentType: string        = researchBlueprint.contentType || "blog_post";
     const articleTitle: string       = researchBlueprint.articleTitle || keyword;
     const selectedKeywords: string[] = researchBlueprint.selectedKeywords || [];
     const isFirstSection             = sectionIndex === 0;
@@ -502,6 +504,8 @@ ${getLangRule(language)}
 6. INLINE STYLES ONLY — All style="" with double quotes.
 7. RICH FORMAT — Use the format instruction below. Tables, bullets, blockquotes, and H3s make content scannable and valuable. DO NOT flatten everything into paragraphs.
 ═══════════════════════════════
+
+${getContentTypeInstruction(contentType)}
 
 ${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParagraphSentences || 2, 2), sectionIndex)}
 

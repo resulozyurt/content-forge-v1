@@ -1,6 +1,6 @@
 // apps/web/src/hooks/useContentEngine.ts
 import { useState } from "react";
-import { OutlineHeading, ImageConfig } from "@/types/generator";
+import { OutlineHeading, ImageConfig, ContentType } from "@/types/generator";
 import { normalizeLanguage } from "@/lib/language";
 
 export type EngineStatus =
@@ -22,6 +22,8 @@ export interface SeoMetadata {
 interface GenerationParams {
   keyword: string;
   targetLanguage: "en-US" | "tr-TR";
+  // Fix #5: chosen in GeneratorConfig; drives the writer archetype.
+  contentType?: ContentType;
   userHeadings: OutlineHeading[];
   selectedKeywords: string[];
   // Forwarded from ResearchAccordion — PAA questions and content gaps
@@ -182,6 +184,7 @@ export function useContentEngine() {
   const startGeneration = async ({
     keyword,
     targetLanguage,
+    contentType,
     userHeadings,
     selectedKeywords,
     questions = [],
@@ -205,6 +208,9 @@ export function useContentEngine() {
         throw new Error(`Research failed: ${err.error || researchRes.statusText}`);
       }
       const researchBlueprint = await researchRes.json();
+      // Fix #5: attach the content type to the blueprint so both the
+      // orchestrator and every writer call receive it downstream.
+      researchBlueprint.contentType = contentType ?? "blog_post";
 
       // ── Build raw sections from Outline Architect headings ───────────────
       const rawSections = buildSectionsFromHeadings(userHeadings);

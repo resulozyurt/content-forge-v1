@@ -163,6 +163,9 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
         startGeneration({
             keyword,
             targetLanguage,
+            // Fix #5: forward the selected content type so the engine can
+            // hand the writer a type-specific archetype (pillar/guide/etc.).
+            contentType: outlineData.config?.contentType,
             userHeadings: outlineData.headings || [],
             selectedKeywords,
             questions,
