@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { FinalOutlineData, GeneratedBlock } from "@/types/generator";
 import DOMPurify from "isomorphic-dompurify";
 import { useContentEngine } from "@/hooks/useContentEngine";
+import { normalizeLanguage } from "@/lib/language";
 
 interface LiveGenerationProps {
     outlineData: FinalOutlineData & { config?: any };
@@ -146,10 +147,12 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
 
         const selectedKeywords = outlineData.selectedKeywords || [];
 
-        let targetLanguage: "en-US" | "tr-TR" | "es-ES" = "en-US";
-        const configLang = (outlineData.config?.language || "").toLowerCase();
-        if (configLang === "tr" || configLang.includes("türk")) targetLanguage = "tr-TR";
-        if (configLang === "es" || configLang.includes("spanish")) targetLanguage = "es-ES";
+        // Single source of truth for output language. Everything downstream
+        // (research → orchestrate → writer → editor → seo-meta) reads this one
+        // canonical value. The old hand-rolled block carried an unreachable
+        // es-ES branch (the UI only offers en/tr) and drifted in format from
+        // every other stage — normalizeLanguage eliminates both problems.
+        const targetLanguage = normalizeLanguage(outlineData.config?.language).engineLocale;
 
         // Pass headings + ResearchAccordion data (questions, gaps) to the engine
         const questions = (outlineData as any).researchData?.questions
