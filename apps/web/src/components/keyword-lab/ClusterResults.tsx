@@ -202,14 +202,14 @@ export default function ClusterResults({ data, seedKeyword }: ClusterResultsProp
                                 <div className="flex flex-wrap gap-2 mt-4 mb-5">
                                     {/* Keyword type badge (blue) with hover explanation */}
                                     <InfoTooltip text={SEO_TYPE_INFO[item.type] ?? "The kind of keyword this is."}>
-                                        <span className="text-xs px-2.5 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 rounded-lg flex items-center gap-1.5 font-medium border border-blue-100 dark:border-blue-800/30">
-                                            <Target size={14} /> {SEO_TYPE_LABELS[item.type] ?? item.type}
+                                        <span className="text-xs px-2.5 py-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 rounded-lg flex items-center gap-1.5 font-medium border border-blue-100 dark:border-blue-800/30 max-w-full min-w-0 break-words">
+                                            <Target size={14} className="flex-shrink-0" /> {SEO_TYPE_LABELS[item.type] ?? item.type}
                                         </span>
                                     </InfoTooltip>
                                     {/* Recommended format badge (purple) with hover explanation */}
                                     <InfoTooltip text={SEO_FORMAT_INFO}>
-                                        <span className="text-xs px-2.5 py-1.5 bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400 rounded-lg flex items-center gap-1.5 font-medium border border-purple-100 dark:border-purple-800/30 capitalize">
-                                            <LayoutTemplate size={14} /> {item.format}
+                                        <span className="text-xs px-2.5 py-1.5 bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400 rounded-lg flex items-center gap-1.5 font-medium border border-purple-100 dark:border-purple-800/30 capitalize max-w-full min-w-0 break-words">
+                                            <LayoutTemplate size={14} className="flex-shrink-0" /> {item.format}
                                         </span>
                                     </InfoTooltip>
                                 </div>
