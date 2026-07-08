@@ -7,3 +7,15 @@ export interface KeywordResult {
   topicIdeas: Array<{ title: string; targetAudience: string; angle: string; format: "guide" | "comparison" | "case-study" | "listicle" | "tutorial" }>;
   tacticalTips: Array<{ tip: string; category: "on-page" | "technical" | "ai-optimization" }>;
 }
+// Lightweight summary row returned by GET /api/keyword-lab/history (list mode).
+// The heavy `results` JSON is intentionally excluded from list responses.
+export interface KeywordSessionSummary {
+  id: string;
+  seedKeyword: string;
+  createdAt: string; // ISO string over the wire
+}
+
+// Full record returned by GET /api/keyword-lab/history?id=xxx (detail mode).
+export interface KeywordSessionDetail extends KeywordSessionSummary {
+  results: KeywordResult;
+}
