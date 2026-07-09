@@ -1,22 +1,19 @@
 // apps/web/src/lib/content-analysis.ts
 //
-// READABILITY FIX (v2): the previous analyzer computed Flesch over the ENTIRE
-// stripped HTML — headings, table cells, figcaptions, Key-Takeaways card
-// labels and "By the Numbers" callouts were all glued into the text stream.
-// Most of those fragments carry no terminal punctuation, so they merged with
-// the following text into giant pseudo-sentences and artificially inflated
-// avg-sentence-length (and tanked the Flesch score) no matter how well the
-// writer agent performed.
+// READABILITY (v3): all readability math now lives in lib/readability.ts —
+// the single source of truth shared with the api/v2/generator/editor QA gate.
+// This module keeps the panel-facing ContentStats shape (word/char counts,
+// headings, links, media) and delegates score/label/color to the engine.
 //
-// v2 measures readability over PROSE UNITS ONLY:
-//   - text inside <p> and <li> blocks (what a human actually reads as prose)
-//   - tables, figcaptions, <cite> and headings are excluded from readability
-//     (they still count toward wordCount/charCount/readingTime, matching the
-//     panel's "Words" stat)
-//   - each <li> is its own sentence boundary — bullets never merge with the
-//     next paragraph anymore
-//   - sentence split protects decimals ("3.5") and only breaks before a
-//     capital/digit, mirroring the editor agent's segmentation
+// v3 also adds LANGUAGE AWARENESS: pass the article language and Turkish
+// content is scored with the Ateşman formula instead of English Flesch
+// coefficients (which produced a misleading score for TR prose).
+//
+// History (v2, preserved inside lib/readability.ts): score PROSE UNITS ONLY —
+// <p>/<li> text; tables, figcaptions, <cite> and headings excluded; each <li>
+// its own sentence boundary; decimal-safe sentence split.
+
+import { analyzeReadability } from "./readability";
 
 export interface ContentStats {
   readingTime: number;
@@ -26,6 +23,8 @@ export interface ContentStats {
   fleschScore: number;
   fleschLabel: string;
   fleschColor: string;
+  /** "flesch" (EN) or "atesman" (TR) — lets the UI name the right formula. */
+  readabilityFormula: "flesch" | "atesman";
   h2Count: number;
   h3Count: number;
   internalLinks: number;
@@ -46,16 +45,6 @@ export interface KeywordDensityResult {
   inAnyHeading: boolean;
 }
 
-const countSyllables = (word: string): number => {
-  word = word.toLowerCase().replace(/[^a-zçğıöşü]/g, '');
-  if (word.length === 0) return 1;
-  if (word.length <= 3) return 1;
-  word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
-  word = word.replace(/^y/, '');
-  const syllables = word.match(/[aeiouyçğıöşü]{1,2}/g);
-  return syllables ? syllables.length : 1;
-};
-
 const stripHtml = (html: string): string => {
   return html
     .replace(/<style[^>]*>.*?<\/style>/gi, '')
@@ -65,92 +54,18 @@ const stripHtml = (html: string): string => {
     .trim();
 };
 
-// ---------------------------------------------------------------------------
-// Prose extraction for readability scoring.
-// Returns an array of prose "units" — each unit is the plain text of one
-// <p> or <li> block. Tables, figcaptions and cites are removed BEFORE
-// extraction so their cell/caption text never leaks into a prose unit.
-// ---------------------------------------------------------------------------
-const extractProseUnits = (html: string): string[] => {
-  const cleaned = html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<table[\s\S]*?<\/table>/gi, ' ')
-    .replace(/<figcaption[\s\S]*?<\/figcaption>/gi, ' ')
-    .replace(/<cite[\s\S]*?<\/cite>/gi, ' ');
-
-  const units: string[] = [];
-  const blockRegex = /<(p|li)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = blockRegex.exec(cleaned)) !== null) {
-    const inner = match[2];
-    // Skip container <li> that wraps <p> blocks — the inner <p> is matched
-    // separately; counting both would double the text.
-    if (/<p[\s>]/i.test(inner)) continue;
-
-    const text = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    // Skip labels/badges ("✦ Key Takeaways · 7 min read", nav chips, etc.) —
-    // fragments under 4 words are UI furniture, not prose.
-    if (text.split(/\s+/).filter(Boolean).length < 4) continue;
-
-    units.push(text);
-  }
-
-  return units;
-};
-
-// Split one prose unit into sentences. Decimal-safe: only breaks after
-// terminal punctuation followed by whitespace + capital/digit/quote.
-const splitSentences = (unit: string): string[] => {
-  return unit
-    .split(/(?<=[.!?…])\s+(?=[A-Z0-9ÇĞİÖŞÜ"'"'])/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-};
-
-export const analyzeContent = (html: string, brandDomain: string = ""): ContentStats => {
+export const analyzeContent = (
+  html: string,
+  brandDomain: string = "",
+  language?: string | null
+): ContentStats => {
   const text = stripHtml(html);
   const words = text.split(/\s+/).filter(w => w.length > 0);
   const wordCount = words.length;
   const charCount = text.replace(/\s/g, '').length;
 
-  // ── Readability: prose units only ────────────────────────────────────────
-  const proseUnits = extractProseUnits(html);
-
-  let proseWords: string[] = [];
-  let sentenceCount = 0;
-
-  if (proseUnits.length > 0) {
-    for (const unit of proseUnits) {
-      const sentences = splitSentences(unit);
-      sentenceCount += Math.max(1, sentences.length);
-      proseWords = proseWords.concat(unit.split(/\s+/).filter((w) => w.length > 0));
-    }
-  } else {
-    // Fallback (plain text / no p-li markup): old whole-text behavior.
-    proseWords = words;
-    sentenceCount = text.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
-  }
-
-  sentenceCount = Math.max(1, sentenceCount);
-  const proseWordCount = Math.max(1, proseWords.length);
-  const sentenceLength = proseWordCount / sentenceCount;
-
-  const totalSyllables = proseWords.reduce((acc, word) => acc + countSyllables(word), 0);
-
-  let fleschScore = 0;
-  if (proseWordCount > 0) {
-    fleschScore = 206.835 - 1.015 * sentenceLength - 84.6 * (totalSyllables / proseWordCount);
-  }
-  fleschScore = Math.max(0, Math.min(100, Math.round(fleschScore)));
-
-  let fleschLabel = "Difficult";
-  let fleschColor = "bg-red-500";
-  if (fleschScore >= 90) { fleschLabel = "Very Easy"; fleschColor = "bg-green-500"; }
-  else if (fleschScore >= 70) { fleschLabel = "Easy"; fleschColor = "bg-green-400"; }
-  else if (fleschScore >= 60) { fleschLabel = "Standard"; fleschColor = "bg-yellow-500"; }
-  else if (fleschScore >= 50) { fleschLabel = "Fairly Difficult"; fleschColor = "bg-orange-500"; }
+  // ── Readability: delegated to the shared engine (prose-only) ─────────────
+  const report = analyzeReadability(html, language);
 
   const readingTime = Math.ceil(wordCount / 200);
 
@@ -182,8 +97,12 @@ export const analyzeContent = (html: string, brandDomain: string = ""): ContentS
   }
 
   return {
-    readingTime, wordCount, charCount, sentenceLength,
-    fleschScore, fleschLabel, fleschColor,
+    readingTime, wordCount, charCount,
+    sentenceLength: report.avgSentenceLength,
+    fleschScore: report.score,
+    fleschLabel: report.label,
+    fleschColor: report.color,
+    readabilityFormula: report.formula,
     h2Count, h3Count, internalLinks, externalLinks, nofollowLinks,
     imageCount, tableCount, listCount
   };

@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { normalizeLanguage } from "@/lib/language";
+import { computeReadabilityForGate, readabilityMinScore } from "@/lib/readability";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -170,77 +171,46 @@ function detectLanguageMismatch(html: string, isTurkish: boolean, targetLabel: s
 }
 
 // ---------------------------------------------------------------------------
-// READABILITY VALIDATION (feedback loop): the readability panel in ProseEditor
-// is computed AFTER generation, but until now nothing in the pipeline ever
-// enforced it — the writer could ship Flesch-30 prose and QA would approve it.
-// This mirrors lib/content-analysis.ts v2: score PROSE ONLY (<p>/<li> text,
-// tables/figcaptions/cites excluded), each <li> its own sentence boundary.
-// English only — the Flesch formula is not valid for Turkish.
+// READABILITY VALIDATION (v3 — shared engine): the Flesch math that used to
+// be duplicated here now lives in lib/readability.ts, the same module the
+// ProseEditor panel consumes — one source of truth, zero threshold drift.
+//
+// v3 upgrades over the old local implementation:
+//   1. TURKISH ENFORCED — Ateşman formula; the gate no longer skips TR.
+//   2. CONTENT-TYPE THRESHOLDS — blog_post must read easiest (EN 60 / TR 55),
+//      guides 55/50, product/service pages 50/45 (see readabilityMinScore).
+//   3. WORST SENTENCES IN THE PROMPT — the correction prompt names the exact
+//      sentences dragging the score down instead of only citing an average.
 // ---------------------------------------------------------------------------
-const READABILITY_MIN_SCORE = 55;
 
-function countSyllablesEn(word: string): number {
-  word = word.toLowerCase().replace(/[^a-z]/g, "");
-  if (word.length === 0) return 1;
-  if (word.length <= 3) return 1;
-  word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "");
-  word = word.replace(/^y/, "");
-  const syllables = word.match(/[aeiouy]{1,2}/g);
-  return syllables ? syllables.length : 1;
-}
+function validateReadability(
+  html: string,
+  language: string | undefined,
+  contentType: string | undefined
+): string[] {
+  const result = computeReadabilityForGate(html, language);
+  const minScore = readabilityMinScore(contentType, language);
+  if (!result || result.score >= minScore) return [];
 
-function computeProseFlesch(html: string): { score: number; avgSentenceLen: number; wordCount: number } | null {
-  const cleaned = html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<table[\s\S]*?<\/table>/gi, " ")
-    .replace(/<figcaption[\s\S]*?<\/figcaption>/gi, " ")
-    .replace(/<cite[\s\S]*?<\/cite>/gi, " ");
+  const formulaName = result.formula === "atesman" ? "Ateşman Readability (Turkish)" : "Flesch Reading Ease";
+  console.warn(
+    `[EDITOR] Readability too low: ${formulaName} ${result.score} (min ${minScore}, avg sentence ${result.avgSentenceLen} words)`
+  );
 
-  const blockRegex = /<(p|li)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
-  let match: RegExpExecArray | null;
-  let words: string[] = [];
-  let sentenceCount = 0;
+  const worstBlock =
+    result.worstSentences.length > 0
+      ? `\nThese exact sentences are dragging the score down — rewrite EACH of them as 2+ shorter sentences:\n${result.worstSentences
+          .map((s, i) => `  ${i + 1}. (${s.words} words) "${s.text}"`)
+          .join("\n")}`
+      : "";
 
-  while ((match = blockRegex.exec(cleaned)) !== null) {
-    const inner = match[2];
-    if (/<p[\s>]/i.test(inner)) continue; // container <li> wrapping <p> — inner <p> matches separately
-    const text = inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    const unitWords = text.split(/\s+/).filter((w) => w.length > 0);
-    if (unitWords.length < 4) continue; // labels/badges, not prose
-
-    const sentences = text
-      .split(/(?<=[.!?…])\s+(?=[A-Z0-9"'])/)
-      .filter((x) => x.trim().length > 0);
-    sentenceCount += Math.max(1, sentences.length);
-    words = words.concat(unitWords);
-  }
-
-  if (words.length < 40) return null; // too little prose to judge reliably
-
-  const syllables = words.reduce((acc, w) => acc + countSyllablesEn(w), 0);
-  const avgSentenceLen = words.length / Math.max(1, sentenceCount);
-  const raw = 206.835 - 1.015 * avgSentenceLen - 84.6 * (syllables / words.length);
-  return {
-    score: Math.max(0, Math.min(100, Math.round(raw))),
-    avgSentenceLen: Math.round(avgSentenceLen * 10) / 10,
-    wordCount: words.length,
-  };
-}
-
-function validateReadability(html: string, isTurkish: boolean): string[] {
-  if (isTurkish) return []; // Flesch is English-only; no Turkish formula wired yet
-  const result = computeProseFlesch(html);
-  if (!result || result.score >= READABILITY_MIN_SCORE) return [];
-
-  console.warn(`[EDITOR] Readability too low: Flesch ${result.score} (avg sentence ${result.avgSentenceLen} words)`);
   return [
-    `READABILITY TOO LOW: Flesch Reading Ease is ${result.score} (minimum: ${READABILITY_MIN_SCORE}). Average sentence length is ${result.avgSentenceLen} words. Rewrite the prose to be easier to read WITHOUT losing facts, numbers, or links:
+    `READABILITY TOO LOW: ${formulaName} is ${result.score} (minimum: ${minScore}). Average sentence length is ${result.avgSentenceLen} words. Rewrite the prose to be easier to read WITHOUT losing facts, numbers, or links:
 - Split every sentence longer than 20 words into two.
 - Target 12–15 words average per sentence; mix in short 5–8 word sentences.
 - Replace multi-syllable words with plain ones: "utilize"→"use", "facilitate"→"help", "implement"→"set up", "demonstrate"→"show", "approximately"→"about".
 - Cut filler: "in order to"→"to", "due to the fact that"→"because".
-- Keep ALL stats, <a> links, HTML structure, and %%FIGURE_N%%/%%IMG_N%% placeholders exactly as they are.`,
+- Keep ALL stats, <a> links, HTML structure, and %%FIGURE_N%%/%%IMG_N%% placeholders exactly as they are.${worstBlock}`,
   ];
 }
 
@@ -252,7 +222,7 @@ export async function POST(req: NextRequest) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     parsedBody = await req.json();
-    const { generatedChunk: rawChunk, sectionPlan, language } = parsedBody;
+    const { generatedChunk: rawChunk, sectionPlan, language, contentType } = parsedBody;
     const lang = normalizeLanguage(language);
 
     // Guard: malformed or missing chunk — pass through immediately
@@ -325,8 +295,9 @@ export async function POST(req: NextRequest) {
     // ── Language validation (Fix #3) ─────────────────────────────────────────
     validationErrors.push(...detectLanguageMismatch(generatedChunk, lang.isTurkish, lang.label));
 
-    // ── Readability feedback loop (Flesch ≥ 55, prose-only, EN) ─────────────
-    validationErrors.push(...validateReadability(generatedChunk, lang.isTurkish));
+    // ── Readability feedback loop (shared engine: Flesch EN / Ateşman TR,
+    //    content-type aware minimum, prose-only) ─────────────────────────────
+    validationErrors.push(...validateReadability(generatedChunk, language, contentType));
 
     // ── All checks passed ───────────────────────────────────────────────────
     if (validationErrors.length === 0) {
@@ -387,6 +358,78 @@ ${chunkForClaude}
         .replace(/^```\s*/i, "")
         .replace(/```\s*$/i, "")
         .trim();
+
+      // ── READABILITY RE-CHECK + ONE TARGETED RETRY (v3) ─────────────────────
+      // The first correction pass fixes ALL error types in one shot; before v3
+      // its output was returned without ever re-scoring, so a failed
+      // readability fix sailed through as "corrected". Now: if readability was
+      // among the errors, re-score the corrected chunk (placeholders are still
+      // in place — they are not prose, so they don't skew the score) and run
+      // exactly ONE readability-only rewrite if it is still below the minimum.
+      // The retry result is kept only if it measurably improves the score.
+      const hadReadabilityError = validationErrors.some((e) => e.startsWith("READABILITY TOO LOW"));
+      if (hadReadabilityError) {
+        const minScore = readabilityMinScore(contentType, language);
+        const recheck = computeReadabilityForGate(correctedChunk, language);
+        if (recheck && recheck.score < minScore) {
+          console.warn(
+            `[EDITOR] Post-correction readability still ${recheck.score} (min ${minScore}) — running targeted readability retry`
+          );
+          const worstList = recheck.worstSentences
+            .map((s, i) => `  ${i + 1}. (${s.words} words) "${s.text}"`)
+            .join("\n");
+          const retryPrompt = `You are a plain-language line editor. The HTML below scores ${recheck.score} on readability (minimum required: ${minScore}). Your ONLY job is to make the prose easier to read. Do not add or remove information.
+
+${lang.promptRule}
+
+REWRITE RULES:
+- Split every sentence longer than 20 words into two or more.
+- Target 12–15 words average per sentence; mix in short 5–8 word sentences.
+- Replace multi-syllable words with plain ones ("utilize"→"use", "facilitate"→"help", "implement"→"set up", "demonstrate"→"show", "approximately"→"about").
+- Active voice. Cut filler ("in order to"→"to", "due to the fact that"→"because").
+${worstList ? `- These exact sentences MUST each become 2+ shorter sentences:\n${worstList}` : ""}
+
+PRESERVE EXACTLY: all HTML tags and structure, every <a> href, all numbers/stats, %%FIGURE_N%% and %%IMG_N%% placeholders, <h2>/<h3> headings.
+Output ONLY the rewritten HTML. No explanations, no code fences.
+
+HTML TO REWRITE:
+---
+${correctedChunk}
+---`;
+          try {
+            const retryResponse = await anthropic.messages.create({
+              model: "claude-sonnet-4-6",
+              max_tokens: 3000,
+              messages: [{ role: "user", content: retryPrompt }],
+              temperature: 0.1,
+            });
+            const retryBlock = retryResponse.content.find(
+              (block): block is Anthropic.TextBlock => block.type === "text"
+            );
+            const retryChunk = (retryBlock?.text || "")
+              .replace(/^```html\s*/i, "")
+              .replace(/^```\s*/i, "")
+              .replace(/```\s*$/i, "")
+              .trim();
+            if (retryChunk.length > 50) {
+              const retryScore = computeReadabilityForGate(retryChunk, language);
+              if (retryScore && retryScore.score > recheck.score) {
+                console.log(
+                  `[EDITOR] Readability retry improved score: ${recheck.score} → ${retryScore.score}`
+                );
+                correctedChunk = retryChunk;
+              } else {
+                console.warn(
+                  `[EDITOR] Readability retry did not improve (${retryScore?.score ?? "n/a"}) — keeping first correction`
+                );
+              }
+            }
+          } catch (retryErr) {
+            // Retry is best-effort — never fail the pipeline over it.
+            console.warn("[EDITOR] Readability retry call failed — keeping first correction:", retryErr);
+          }
+        }
+      }
 
       // Re-inject extracted figures and images back into corrected content
       extractedFigures.forEach((fig, idx) => {

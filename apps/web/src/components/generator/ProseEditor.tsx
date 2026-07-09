@@ -10,10 +10,15 @@ import { Table } from '@tiptap/extension-table/table';
 import { TableRow } from '@tiptap/extension-table/row';
 import { TableCell } from '@tiptap/extension-table/cell';
 import { TableHeader } from '@tiptap/extension-table/header';
+import { Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import TurndownService from 'turndown';
 import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import { analyzeContent, analyzeKeywordDensity } from "@/lib/content-analysis";
+import { analyzeReadability, type ReadabilityCheck } from "@/lib/readability";
 import { runSeoChecklist } from "@/lib/seo-checklist";
 import { useRef } from 'react';
 
@@ -21,7 +26,8 @@ import {
     UploadCloud, CheckCircle2, Activity, Target,
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
     Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
-    ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info
+    ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info,
+    Sparkles, Highlighter
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +59,98 @@ const PROSE_PURIFY_CONFIG = {
 };
 
 // ---------------------------------------------------------------------------
+// READABILITY HIGHLIGHT (Faz 3) — inline decorations for sentences flagged by
+// lib/readability.ts checks. Decorations (not marks) on purpose: they never
+// touch the document/HTML output, survive edits via position mapping, and
+// clear with a single empty DecorationSet dispatch.
+// ---------------------------------------------------------------------------
+const readabilityHighlightKey = new PluginKey<DecorationSet>('readabilityHighlight');
+
+const ReadabilityHighlight = Extension.create({
+    name: 'readabilityHighlight',
+    addProseMirrorPlugins() {
+        return [
+            new Plugin<DecorationSet>({
+                key: readabilityHighlightKey,
+                state: {
+                    init: () => DecorationSet.empty,
+                    apply(tr, old) {
+                        const meta = tr.getMeta(readabilityHighlightKey);
+                        if (meta !== undefined) return meta as DecorationSet;
+                        return tr.docChanged ? old.map(tr.mapping, tr.doc) : old;
+                    },
+                },
+                props: {
+                    decorations(state) {
+                        return readabilityHighlightKey.getState(state) ?? DecorationSet.empty;
+                    },
+                },
+            }),
+        ];
+    },
+});
+
+// ---------------------------------------------------------------------------
+// findPhraseRanges — locates a plain-text sentence (as extracted by the
+// readability engine, i.e. whitespace-collapsed) inside the TipTap doc and
+// returns document position ranges. Handles inline marks splitting text nodes
+// and whitespace differences via a normalized-index → doc-position map.
+// ---------------------------------------------------------------------------
+function findPhraseRanges(doc: PMNode, phrase: string): { from: number; to: number }[] {
+    const ranges: { from: number; to: number }[] = [];
+    const needle = phrase.replace(/\s+/g, ' ').trim();
+    if (needle.length < 4) return ranges;
+
+    doc.descendants((node, pos) => {
+        if (!node.isTextblock) return true;
+
+        // Concatenate the block's inline text, remembering each character's doc position.
+        let blockText = '';
+        const charPos: number[] = [];
+        node.forEach((child, offset) => {
+            if (child.isText && child.text) {
+                for (let i = 0; i < child.text.length; i++) charPos.push(pos + 1 + offset + i);
+                blockText += child.text;
+            } else {
+                charPos.push(pos + 1 + offset);
+                blockText += ' ';
+            }
+        });
+
+        // Normalize whitespace while keeping a map back to raw indices.
+        let norm = '';
+        const normToRaw: number[] = [];
+        let prevSpace = false;
+        for (let i = 0; i < blockText.length; i++) {
+            const isSpace = /\s/.test(blockText[i]);
+            if (isSpace) {
+                if (prevSpace) continue;
+                norm += ' ';
+                normToRaw.push(i);
+                prevSpace = true;
+            } else {
+                norm += blockText[i];
+                normToRaw.push(i);
+                prevSpace = false;
+            }
+        }
+
+        let searchFrom = 0;
+        while (searchFrom < norm.length) {
+            const idx = norm.indexOf(needle, searchFrom);
+            if (idx === -1) break;
+            const rawStart = normToRaw[idx];
+            const rawEnd = normToRaw[Math.min(idx + needle.length - 1, normToRaw.length - 1)];
+            ranges.push({ from: charPos[rawStart], to: charPos[rawEnd] + 1 });
+            searchFrom = idx + needle.length;
+        }
+        return false; // don't descend further into this block
+    });
+
+    return ranges;
+}
+
+// ---------------------------------------------------------------------------
 // TipTap extensions — tablo desteği dahil
 // ---------------------------------------------------------------------------
 const globalEditorExtensions = [
@@ -66,6 +164,7 @@ const globalEditorExtensions = [
     TableRow,
     TableHeader,
     TableCell,
+    ReadabilityHighlight,
 ];
 
 interface ProseEditorProps {
@@ -261,9 +360,110 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         }
     }, [editor, blocks, generateHTMLFromBlocks]);
 
-    const contentStats = useMemo(() => analyzeContent(currentHtml), [currentHtml]);
+    // v3: article language drives the readability formula (EN Flesch / TR Ateşman)
+    const articleLanguage = (outlineData as any).config?.language || "English (US)";
+
+    const contentStats = useMemo(() => analyzeContent(currentHtml, "", articleLanguage), [currentHtml, articleLanguage]);
+    const readability = useMemo(() => analyzeReadability(currentHtml, articleLanguage), [currentHtml, articleLanguage]);
     const checklist = useMemo(() => runSeoChecklist(currentHtml, seoMeta), [currentHtml, seoMeta]);
     const checklistScore = checklist.filter(c => c.pass).length;
+
+    // ── Live score delta (Faz 3): shows +N / −N as the user (or an AI fix)
+    //    edits — the gamification loop that makes the checklist feel alive.
+    const prevScoreRef = useRef<number | null>(null);
+    const [scoreDelta, setScoreDelta] = useState<number>(0);
+    useEffect(() => {
+        if (prevScoreRef.current !== null && readability.score !== prevScoreRef.current) {
+            setScoreDelta(readability.score - prevScoreRef.current);
+        }
+        prevScoreRef.current = readability.score;
+    }, [readability.score]);
+
+    // ── Readability checklist interactions ─────────────────────────────────
+    const [activeHighlightCheck, setActiveHighlightCheck] = useState<string | null>(null);
+    const [fixingCheckId, setFixingCheckId] = useState<string | null>(null);
+
+    const applyReadabilityHighlights = useCallback((checkId: string | null, items: string[]) => {
+        if (!editor) return;
+        const { state, view } = editor;
+
+        if (!checkId || items.length === 0) {
+            view.dispatch(state.tr.setMeta(readabilityHighlightKey, DecorationSet.empty));
+            setActiveHighlightCheck(null);
+            return;
+        }
+
+        const decorations: Decoration[] = [];
+        let firstFrom: number | null = null;
+        for (const item of items) {
+            for (const range of findPhraseRanges(state.doc, item)) {
+                decorations.push(Decoration.inline(range.from, range.to, {
+                    style: 'background-color: rgba(250,204,21,0.35); box-shadow: inset 0 -2px 0 #f59e0b; border-radius: 2px;'
+                }));
+                if (firstFrom === null || range.from < firstFrom) firstFrom = range.from;
+            }
+        }
+
+        view.dispatch(state.tr.setMeta(readabilityHighlightKey, DecorationSet.create(state.doc, decorations)));
+        setActiveHighlightCheck(checkId);
+        if (firstFrom !== null) {
+            editor.chain().setTextSelection(firstFrom).scrollIntoView().run();
+        }
+    }, [editor]);
+
+    // One-click AI fix for a checklist item: batch-simplify the flagged
+    // sentences server-side, then swap each one in place in the doc. Sentences
+    // that contain a link are skipped — a plain-text replacement would destroy
+    // the <a> mark (and internal links are an SEO deliverable).
+    const handleReadabilityFix = async (check: ReadabilityCheck) => {
+        if (!editor || fixingCheckId) return;
+
+        const linkMark = editor.schema.marks.link;
+        const fixable: string[] = [];
+        for (const item of check.items) {
+            const ranges = findPhraseRanges(editor.state.doc, item);
+            if (ranges.length === 0) continue;
+            const hasLink = linkMark
+                ? editor.state.doc.rangeHasMark(ranges[0].from, ranges[0].to, linkMark)
+                : false;
+            if (!hasLink) fixable.push(item);
+        }
+
+        if (fixable.length === 0) {
+            alert("The flagged sentences contain links or could not be located — please edit them manually so links are preserved.");
+            return;
+        }
+
+        try {
+            setFixingCheckId(check.id);
+            const response = await fetch('/api/v2/generator/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'SimplifyBatch', sentences: fixable, language: articleLanguage })
+            });
+            if (!response.ok) throw new Error("Readability fix service unavailable.");
+            const data = await response.json();
+            const results: string[] = Array.isArray(data.results) ? data.results : [];
+
+            // Replace sequentially, re-locating each sentence right before its
+            // replacement — earlier swaps shift every later position.
+            fixable.forEach((original, i) => {
+                const rewritten = (results[i] || '').trim();
+                if (!rewritten || rewritten === original) return;
+                const ranges = findPhraseRanges(editor.state.doc, original);
+                if (ranges.length === 0) return;
+                editor.chain().insertContentAt({ from: ranges[0].from, to: ranges[0].to }, rewritten).run();
+            });
+
+            // Positions changed — clear stale highlights.
+            applyReadabilityHighlights(null, []);
+        } catch (error: any) {
+            console.error("[READABILITY_FIX_FAULT]:", error);
+            alert(`Readability fix failed: ${error.message}`);
+        } finally {
+            setFixingCheckId(null);
+        }
+    };
 
     const keywordDensity = useMemo(() => {
         const keywordsToTrack = Array.from(new Set([
@@ -379,10 +579,13 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
         try {
             setIsAILoading(true);
-            const response = await fetch('/api/generate/edit', {
+            // v3: routed to the new v2 endpoint — /api/generate/edit no longer
+            // exists (moved to generate_v1_deprecated), so this button 404'd.
+            // Language now travels with the request so TR articles get TR rewrites.
+            const response = await fetch('/api/v2/generator/edit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, text, context: seoMeta.metaTitle })
+                body: JSON.stringify({ action, text, context: seoMeta.metaTitle, language: articleLanguage })
             });
 
             if (!response.ok) throw new Error("The NLP transformation pipeline failed.");
@@ -576,17 +779,104 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     <div className="flex-1 overflow-y-auto p-4 space-y-4">
                         {activeTab === 'optimize' && (
                             <div className="space-y-4 animate-in fade-in slide-in-from-right-2 duration-300">
-                                <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true} tooltip="How easy your article is to read. A higher Flesch score means simpler, more scannable text — aim for 60+ for a general audience.">
+                                <AccordionSection title="Readability" icon={BookOpen} badgeCount={`${contentStats.readingTime} min`} defaultOpen={true} tooltip={contentStats.readabilityFormula === 'atesman'
+                                    ? "Makalenizin okunma kolaylığı (Ateşman formülü). Yüksek skor daha sade, taranabilir metin demektir — genel kitle için 55+ hedefleyin."
+                                    : "How easy your article is to read. A higher Flesch score means simpler, more scannable text — aim for 60+ for a general audience."}>
                                     <div className="space-y-4">
                                         <div>
                                             <div className="flex justify-between text-sm mb-1">
-                                                <span className="text-gray-600 dark:text-gray-400 font-medium">Flesch Reading Ease</span>
-                                                <span className="text-gray-900 dark:text-white font-bold">{contentStats.fleschScore} ({contentStats.fleschLabel})</span>
+                                                <span className="text-gray-600 dark:text-gray-400 font-medium">
+                                                    {contentStats.readabilityFormula === 'atesman' ? 'Ateşman Okunabilirlik' : 'Flesch Reading Ease'}
+                                                </span>
+                                                <span className="flex items-center gap-1.5 text-gray-900 dark:text-white font-bold">
+                                                    {contentStats.fleschScore} ({contentStats.fleschLabel})
+                                                    {scoreDelta !== 0 && (
+                                                        <span className={cn(
+                                                            "text-[10px] font-bold px-1.5 py-0.5 rounded-full",
+                                                            scoreDelta > 0
+                                                                ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                                                : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                                        )}>
+                                                            {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta}
+                                                        </span>
+                                                    )}
+                                                </span>
                                             </div>
                                             <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                                 <div className={cn("h-full rounded-full transition-all duration-500", contentStats.fleschColor)} style={{ width: `${contentStats.fleschScore}%` }}></div>
                                             </div>
                                         </div>
+
+                                        {/* ── Kişiselleştirilmiş iyileştirme listesi (Faz 3) ──
+                                            Deterministic checks from lib/readability.ts — each item
+                                            names the exact sentences, highlights them in the editor,
+                                            and offers a one-click targeted AI fix. */}
+                                        {!readability.insufficientProse && readability.checks.length > 0 && (
+                                            <div className="space-y-2">
+                                                <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                                    Improvement Checklist
+                                                </div>
+                                                {readability.checks.map((check) => (
+                                                    <details key={check.id} className="group bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-100 dark:border-gray-800 [&_summary::-webkit-details-marker]:hidden">
+                                                        <summary className="flex items-center justify-between p-2.5 cursor-pointer list-none">
+                                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                                {check.status === 'good'
+                                                                    ? <CheckCircle2 size={15} className="shrink-0 text-green-500" />
+                                                                    : check.status === 'warning'
+                                                                        ? <AlertCircle size={15} className="shrink-0 text-yellow-500" />
+                                                                        : <XCircle size={15} className="shrink-0 text-red-500" />}
+                                                                <span className={cn("text-sm font-medium truncate", check.status === 'good' ? "text-gray-500 dark:text-gray-400" : "text-gray-900 dark:text-gray-200")}>
+                                                                    {check.label}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex items-center gap-2 shrink-0">
+                                                                {check.status !== 'good' && check.scoreImpact > 0 && (
+                                                                    <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded-full">
+                                                                        ≈ +{check.scoreImpact} pts
+                                                                    </span>
+                                                                )}
+                                                                <span className="text-xs font-bold text-gray-500 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
+                                                                    {check.id === 'transition-words' ? `${check.count}/${check.total}` : check.count}
+                                                                </span>
+                                                                <ChevronDown size={13} className="text-gray-400 group-open:rotate-180 transition-transform" />
+                                                            </div>
+                                                        </summary>
+                                                        <div className="px-3 pb-3 pt-1 space-y-2 border-t border-gray-100 dark:border-gray-800">
+                                                            <p className="text-xs text-gray-600 dark:text-gray-300">{check.message}</p>
+                                                            <p className="text-xs text-gray-500 dark:text-gray-400 italic">{check.suggestion}</p>
+                                                            {check.items.length > 0 && check.status !== 'good' && (
+                                                                <div className="flex items-center gap-2 pt-1">
+                                                                    <button
+                                                                        onClick={() => activeHighlightCheck === check.id
+                                                                            ? applyReadabilityHighlights(null, [])
+                                                                            : applyReadabilityHighlights(check.id, check.items)}
+                                                                        className={cn(
+                                                                            "flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded-md border transition-colors",
+                                                                            activeHighlightCheck === check.id
+                                                                                ? "bg-yellow-100 border-yellow-300 text-yellow-800 dark:bg-yellow-900/40 dark:border-yellow-700 dark:text-yellow-300"
+                                                                                : "bg-white border-gray-200 text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300"
+                                                                        )}
+                                                                    >
+                                                                        <Highlighter size={11} />
+                                                                        {activeHighlightCheck === check.id ? 'Clear' : 'Show in text'}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleReadabilityFix(check)}
+                                                                        disabled={fixingCheckId !== null}
+                                                                        className="flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                                                                    >
+                                                                        {fixingCheckId === check.id
+                                                                            ? <Loader2 size={11} className="animate-spin" />
+                                                                            : <Sparkles size={11} />}
+                                                                        Fix with AI
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </details>
+                                                ))}
+                                            </div>
+                                        )}
 
                                         <div className="grid grid-cols-2 gap-3 text-sm">
                                             <div className="bg-gray-50 dark:bg-gray-900 p-2.5 rounded-lg border border-gray-100 dark:border-gray-800">

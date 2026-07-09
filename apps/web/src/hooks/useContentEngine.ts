@@ -369,7 +369,9 @@ export function useContentEngine() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             signal: AbortSignal.timeout(60000),
-            body: JSON.stringify({ language: targetLanguage, generatedChunk: draftChunk, sectionPlan: section }),
+            // v3: contentType included so the editor's readability gate can
+            // apply the content-type-aware minimum score (blog 60 / guide 55 / …).
+            body: JSON.stringify({ language: targetLanguage, generatedChunk: draftChunk, sectionPlan: section, contentType: contentType ?? "blog_post" }),
           });
           if (editorRes.ok) {
             const ed = await editorRes.json();
