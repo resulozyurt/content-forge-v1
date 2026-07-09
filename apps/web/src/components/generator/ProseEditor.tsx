@@ -2,7 +2,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
+// RAILWAY BUILD FIX: `Extension` comes via @tiptap/react (which re-exports all
+// of @tiptap/core) — @tiptap/core is NOT a direct dependency and pnpm's strict
+// node_modules refuses transitive imports ("Module not found: @tiptap/core").
+import { useEditor, EditorContent, Extension } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
@@ -10,7 +13,6 @@ import { Table } from '@tiptap/extension-table/table';
 import { TableRow } from '@tiptap/extension-table/row';
 import { TableCell } from '@tiptap/extension-table/cell';
 import { TableHeader } from '@tiptap/extension-table/header';
-import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
