@@ -448,6 +448,24 @@ export function analyzeReadability(
     };
     const withTransition = allSentences.filter(hasTransition);
     const transPct = withTransition.length / sentenceCount;
+
+    // Candidates for the one-click "add transitions" fix: paragraph-opening
+    // sentences (except the very first paragraph) that lack a transition.
+    // Paragraph openings are where connectors do the most work — they stitch
+    // the new paragraph to the previous one. The UI sends each candidate with
+    // its preceding text so the model picks a connector that actually fits.
+    const transitionCandidates: string[] = [];
+    if (transPct < 0.3) {
+      const pOnly = units.filter((u) => u.tag === "p");
+      for (let i = 1; i < pOnly.length; i++) {
+        const first = splitSentences(pOnly[i].text)[0] || pOnly[i].text;
+        if (!hasTransition(first) && wordsOf(first).length >= 5) {
+          transitionCandidates.push(first);
+        }
+        if (transitionCandidates.length >= MAX_ITEMS_PER_CHECK) break;
+      }
+    }
+
     checks.push({
       id: "transition-words",
       label: t("Transition words", "Geçiş kelimeleri"),
@@ -459,11 +477,10 @@ export function analyzeReadability(
         `Cümlelerin %${(transPct * 100).toFixed(0)}'i geçiş kelimesi içeriyor (hedef: %30+).`
       ),
       suggestion: t(
-        'Connect ideas: "however", "for example", "that means", "as a result".',
-        '"Ancak", "örneğin", "bu yüzden", "sonuç olarak" gibi bağlantılar ekleyin.'
+        'Connect ideas: "however", "for example", "that means", "as a result". The AI fix adds connectors to paragraph openings.',
+        '"Ancak", "örneğin", "bu yüzden", "sonuç olarak" gibi bağlantılar ekleyin. AI düzeltmesi paragraf başlarına bağlaç ekler.'
       ),
-      // Not itemized — this is an "add", not a "fix these sentences" check.
-      items: [],
+      items: transitionCandidates,
       scoreImpact: 0,
     });
   }

@@ -38,8 +38,100 @@ export async function POST(req: Request) {
     const EDIT_COST = 1;
     await BillingGuard.checkCredits(userId, EDIT_COST);
 
-    const { action, text, sentences, context, language } = await req.json();
+    const { action, text, sentences, contexts, paragraphs, context, language } = await req.json();
     const lang = normalizeLanguage(language);
+
+    // Shared helper for the batch actions: call Claude, parse a JSON string
+    // array, fail soft to the originals on malformed output, pad/trim so
+    // indexes always line up with the input.
+    const runBatch = async (prompt: string, originals: string[]): Promise<string[]> => {
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 3000,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+      });
+      const block = response.content.find(
+        (b): b is Anthropic.TextBlock => b.type === "text"
+      );
+      const rawText = (block?.text || "[]").replace(/```json|```/g, "").trim();
+      let results: string[];
+      try {
+        const parsed = JSON.parse(rawText);
+        if (!Array.isArray(parsed)) throw new Error("not an array");
+        results = parsed.map((r: unknown) => String(r));
+      } catch {
+        console.warn(`[EDIT_V2] ${action} JSON parse failed — returning originals`);
+        results = originals;
+      }
+      while (results.length < originals.length) results.push(originals[results.length]);
+      return results.slice(0, originals.length);
+    };
+
+    // ── SplitParagraphBatch: long-paragraph checklist fix ───────────────────
+    // Receives the OUTER HTML of flagged <p> elements (inline tags included)
+    // and returns 2–3 shorter <p> blocks per item with every inline tag —
+    // especially <a> links — preserved verbatim. The client replaces the
+    // paragraph NODE with the returned HTML and re-verifies the link count.
+    if (action === "SplitParagraphBatch") {
+      if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+        return NextResponse.json({ error: "SplitParagraphBatch requires a non-empty 'paragraphs' array." }, { status: 400 });
+      }
+      const batch: string[] = paragraphs.slice(0, 8).map((p: unknown) => String(p));
+
+      const prompt = `You are an HTML line editor. Each item below is the HTML of ONE paragraph that is too long. Split each into 2–3 shorter <p> paragraphs.
+
+${lang.promptRule}
+
+RULES PER ITEM:
+- Output 2–3 complete <p>...</p> blocks (as ONE string per item).
+- PRESERVE every inline tag EXACTLY: every <a> (href, target, rel, style attributes untouched), <strong>, <em> must survive with identical attributes and inner text.
+- Preserve the original <p> tag's attributes (style etc.) on each new <p>.
+- Split at natural sentence boundaries. You may split an overlong sentence in two, but do not add or remove information. Keep every number and stat exactly.
+- No text outside the <p> blocks.
+
+Return ONLY a JSON array of ${batch.length} strings, same order as input. No explanations, no code fences.
+
+INPUT PARAGRAPHS:
+${JSON.stringify(batch, null, 2)}`;
+
+      const results = await runBatch(prompt, batch);
+      await BillingGuard.deductCredits(userId, EDIT_COST, "EDIT");
+      return NextResponse.json({ results }, { status: 200 });
+    }
+
+    // ── TransitionBatch: transition-words checklist fix ─────────────────────
+    // Receives paragraph-opening sentences plus the text that precedes each
+    // one; rewrites every sentence to open with a connector that actually
+    // fits the logical relationship to the preceding text.
+    if (action === "TransitionBatch") {
+      if (!Array.isArray(sentences) || sentences.length === 0) {
+        return NextResponse.json({ error: "TransitionBatch requires a non-empty 'sentences' array." }, { status: 400 });
+      }
+      const batch: string[] = sentences.slice(0, 8).map((s: unknown) => String(s));
+      const ctxs: string[] = Array.isArray(contexts) ? contexts.map((c: unknown) => String(c)) : [];
+
+      const pairs = batch.map((s, i) => ({ precedingText: ctxs[i] || "", sentence: s }));
+
+      const prompt = `You are a plain-language line editor. Each item below is a paragraph-opening sentence plus the text that comes right before it. Rewrite each sentence so it opens with a natural transition word or connector that fits the logical relationship to the preceding text (contrast → "However"/"Ancak", cause → "That's why"/"Bu yüzden", example → "For example"/"Örneğin", addition → "Beyond that"/"Ayrıca", consequence → "As a result"/"Sonuç olarak").
+
+${lang.promptRule}
+
+RULES PER SENTENCE:
+- Change as little as possible: add the connector, adjust capitalization, keep everything else.
+- Keep every number, statistic, and proper noun EXACTLY as written.
+- Do not add new information. Keep the sentence roughly the same length.
+- Output plain text only — no HTML, no quotes.
+
+Return ONLY a JSON array of ${batch.length} strings (the rewritten sentences), same order as input. No explanations, no code fences.
+
+INPUT:
+${JSON.stringify(pairs, null, 2)}`;
+
+      const results = await runBatch(prompt, batch);
+      await BillingGuard.deductCredits(userId, EDIT_COST, "EDIT");
+      return NextResponse.json({ results }, { status: 200 });
+    }
 
     // ── SimplifyBatch: readability checklist one-click fix ──────────────────
     if (action === "SimplifyBatch") {

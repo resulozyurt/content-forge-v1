@@ -153,6 +153,38 @@ function findPhraseRanges(doc: PMNode, phrase: string): { from: number; to: numb
 }
 
 // ---------------------------------------------------------------------------
+// findParagraphByText — locates the <p> NODE whose plain text matches a
+// flagged long-paragraph item, and returns its doc position, size and OUTER
+// HTML (inline tags included, straight from the rendered DOM). Used by the
+// paragraph-split fix, which must replace the whole node — not a text range —
+// so links and inline marks survive the round-trip through the AI.
+// ---------------------------------------------------------------------------
+interface ParagraphMatch { pos: number; nodeSize: number; html: string; }
+
+function findParagraphByText(editorInstance: any, text: string): ParagraphMatch | null {
+    const needle = text.replace(/\s+/g, ' ').trim();
+    if (!needle) return null;
+    let result: ParagraphMatch | null = null;
+
+    editorInstance.state.doc.descendants((node: PMNode, pos: number) => {
+        if (result) return false;
+        if (node.type.name !== 'paragraph') return true;
+        if (node.textContent.replace(/\s+/g, ' ').trim() === needle) {
+            const dom = editorInstance.view.nodeDOM(pos) as HTMLElement | null;
+            result = {
+                pos,
+                nodeSize: node.nodeSize,
+                html: dom?.outerHTML || `<p>${node.textContent}</p>`,
+            };
+            return false;
+        }
+        return true;
+    });
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // TipTap extensions — tablo desteği dahil
 // ---------------------------------------------------------------------------
 const globalEditorExtensions = [
@@ -413,26 +445,19 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         }
     }, [editor]);
 
-    // One-click AI fix for a checklist item: batch-simplify the flagged
-    // sentences server-side, then swap each one in place in the doc. Sentences
-    // that contain a link are skipped — a plain-text replacement would destroy
-    // the <a> mark (and internal links are an SEO deliverable).
-    const handleReadabilityFix = async (check: ReadabilityCheck) => {
+    // Long-paragraph fix: replaces the whole <p> NODE with 2–3 shorter <p>
+    // blocks returned by the AI. Works at the HTML level so <a> links and
+    // inline marks survive; a link-count guard drops any result that lost one.
+    const handleParagraphSplit = async (check: ReadabilityCheck) => {
         if (!editor || fixingCheckId) return;
 
-        const linkMark = editor.schema.marks.link;
-        const fixable: string[] = [];
+        const targets: { text: string; html: string }[] = [];
         for (const item of check.items) {
-            const ranges = findPhraseRanges(editor.state.doc, item);
-            if (ranges.length === 0) continue;
-            const hasLink = linkMark
-                ? editor.state.doc.rangeHasMark(ranges[0].from, ranges[0].to, linkMark)
-                : false;
-            if (!hasLink) fixable.push(item);
+            const found = findParagraphByText(editor, item);
+            if (found) targets.push({ text: item, html: found.html });
         }
-
-        if (fixable.length === 0) {
-            alert("The flagged sentences contain links or could not be located — please edit them manually so links are preserved.");
+        if (targets.length === 0) {
+            alert("The flagged paragraphs could not be located — they may have changed since the last analysis.");
             return;
         }
 
@@ -441,7 +466,88 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             const response = await fetch('/api/v2/generator/edit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'SimplifyBatch', sentences: fixable, language: articleLanguage })
+                body: JSON.stringify({
+                    action: 'SplitParagraphBatch',
+                    paragraphs: targets.map((t) => t.html),
+                    language: articleLanguage
+                })
+            });
+            if (!response.ok) throw new Error("Paragraph split service unavailable.");
+            const data = await response.json();
+            const results: string[] = Array.isArray(data.results) ? data.results : [];
+
+            let skippedLinks = 0;
+            targets.forEach((target, i) => {
+                const html = (results[i] || '').trim();
+                // Must come back as <p> blocks, and must not lose a single link.
+                if (!html || !/^<p[\s>]/i.test(html)) return;
+                const linksBefore = (target.html.match(/<a[\s>]/gi) || []).length;
+                const linksAfter = (html.match(/<a[\s>]/gi) || []).length;
+                if (linksAfter < linksBefore) { skippedLinks++; return; }
+
+                // Re-locate right before replacing — earlier swaps shift positions.
+                const found = findParagraphByText(editor, target.text);
+                if (!found) return;
+                const sanitized = DOMPurify.sanitize(html, PROSE_PURIFY_CONFIG);
+                editor.chain().insertContentAt({ from: found.pos, to: found.pos + found.nodeSize }, sanitized).run();
+            });
+
+            if (skippedLinks > 0) {
+                alert(`${skippedLinks} paragraph(s) were left unchanged because the AI result dropped a link — please split those manually.`);
+            }
+            applyReadabilityHighlights(null, []);
+        } catch (error: any) {
+            console.error("[PARAGRAPH_SPLIT_FAULT]:", error);
+            alert(`Paragraph split failed: ${error.message}`);
+        } finally {
+            setFixingCheckId(null);
+        }
+    };
+
+    // One-click AI fix for a checklist item. Routing:
+    //   long-paragraphs   → node-level paragraph split (links preserved)
+    //   transition-words  → TransitionBatch (context-aware connector rewrite)
+    //   everything else   → SimplifyBatch (sentence-level plain-text swap)
+    // For the sentence-level flows, sentences containing a link are skipped —
+    // a plain-text replacement would destroy the <a> mark.
+    const handleReadabilityFix = async (check: ReadabilityCheck) => {
+        if (!editor || fixingCheckId) return;
+
+        if (check.id === 'long-paragraphs') {
+            return handleParagraphSplit(check);
+        }
+
+        const linkMark = editor.schema.marks.link;
+        const fixable: string[] = [];
+        const precedingContexts: string[] = [];
+        for (const item of check.items) {
+            const ranges = findPhraseRanges(editor.state.doc, item);
+            if (ranges.length === 0) continue;
+            const hasLink = linkMark
+                ? editor.state.doc.rangeHasMark(ranges[0].from, ranges[0].to, linkMark)
+                : false;
+            if (hasLink) continue;
+            fixable.push(item);
+            // Text right before the sentence — lets TransitionBatch pick a
+            // connector that fits the logical relationship.
+            precedingContexts.push(
+                editor.state.doc.textBetween(Math.max(0, ranges[0].from - 220), ranges[0].from, ' ', ' ').trim()
+            );
+        }
+
+        if (fixable.length === 0) {
+            alert("The flagged sentences contain links or could not be located — please edit them manually so links are preserved.");
+            return;
+        }
+
+        const action = check.id === 'transition-words' ? 'TransitionBatch' : 'SimplifyBatch';
+
+        try {
+            setFixingCheckId(check.id);
+            const response = await fetch('/api/v2/generator/edit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, sentences: fixable, contexts: precedingContexts, language: articleLanguage })
             });
             if (!response.ok) throw new Error("Readability fix service unavailable.");
             const data = await response.json();
