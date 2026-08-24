@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
     Loader2, CheckCircle2, Search, Target, Link as LinkIcon,
-    HelpCircle, Layers, FileText, ChevronDown,
+    HelpCircle, Layers, FileText, ChevronDown, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, ResearchResultData } from "@/types/generator";
@@ -44,7 +44,7 @@ const RESEARCH_STEPS = [
         label: "Questions People Ask",
         icon: HelpCircle,
         description:
-            "These are the real questions people ask around this topic. Covering them helps you show up in Google's \"People Also Ask\" box.",
+            "These are the actual questions real people type into Google around this topic. There's nothing to pick here — we automatically hand the most relevant ones to the writer, which weaves the answers into your sections and spins up a matching FAQ. Answering them head-on is what earns you a spot in Google's \"People Also Ask\" box and pulls in extra traffic.",
     },
     {
         id: "gaps",
@@ -314,29 +314,46 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                     {step.id === "serp" && (data.competitors?.length ?? 0) > 0 && (
                                         <div className="space-y-2">
                                             {(data.competitors ?? []).slice(0, 5).map((comp: any) => (
-                                                <button
+                                                <div
                                                     key={comp.id}
-                                                    onClick={() => toggleCompetitor(comp.id)}
                                                     className={cn(
-                                                        "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors",
+                                                        "w-full flex items-center rounded-lg border transition-colors overflow-hidden",
                                                         comp.selected
                                                             ? "bg-indigo-50 border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800"
                                                             : "bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700"
                                                     )}
                                                 >
-                                                    <div className={cn(
-                                                        "w-4 h-4 rounded-full border-2 flex-shrink-0 transition-colors",
-                                                        comp.selected
-                                                            ? "bg-indigo-500 border-indigo-500"
-                                                            : "border-gray-300 dark:border-gray-600"
-                                                    )} />
-                                                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                                                        {comp.title}
-                                                    </span>
-                                                    <span className="ml-auto text-xs text-gray-400 flex-shrink-0">
-                                                        {comp.wordCount?.toLocaleString()} words
-                                                    </span>
-                                                </button>
+                                                    <button
+                                                        onClick={() => toggleCompetitor(comp.id)}
+                                                        className="flex items-center gap-3 p-3 flex-1 min-w-0 text-left"
+                                                    >
+                                                        <div className={cn(
+                                                            "w-4 h-4 rounded-full border-2 flex-shrink-0 transition-colors",
+                                                            comp.selected
+                                                                ? "bg-indigo-500 border-indigo-500"
+                                                                : "border-gray-300 dark:border-gray-600"
+                                                        )} />
+                                                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                                                            {comp.title}
+                                                        </span>
+                                                        <span className="ml-auto text-xs text-gray-400 flex-shrink-0 pl-2">
+                                                            {comp.wordCount?.toLocaleString()} words
+                                                        </span>
+                                                    </button>
+                                                    {comp.url && (
+                                                        <a
+                                                            href={comp.url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            title="Open this page in a new tab"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="flex items-center gap-1.5 self-stretch px-3 text-xs font-semibold text-indigo-600 dark:text-indigo-300 border-l border-indigo-200/70 dark:border-indigo-800/70 hover:bg-indigo-100/60 dark:hover:bg-indigo-800/40 transition-colors flex-shrink-0"
+                                                        >
+                                                            <span className="hidden sm:inline">Visit</span>
+                                                            <ExternalLink className="w-3.5 h-3.5" />
+                                                        </a>
+                                                    )}
+                                                </div>
                                             ))}
                                         </div>
                                     )}
@@ -383,7 +400,7 @@ export default function ResearchAccordion({ config, onCompleteResearch }: Resear
                                     {step.id === "outline" && (
                                         <p className="text-sm text-gray-500 dark:text-gray-400 italic flex items-center gap-2">
                                             <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            Research data consolidated. Review your selections above, then proceed.
+                                            Research is locked in. You'll build the actual outline on the next screen — we'll turn the keywords, questions, and gaps you kept into a starting structure you can edit. Review your picks above, then continue.
                                         </p>
                                     )}
                                 </div>
