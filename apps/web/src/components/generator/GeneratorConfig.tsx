@@ -2,8 +2,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
-import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2 } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useLocale } from "next-intl";
+import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, initialConfigData, ContentType, Language, AIModel, Tone, ContentDepth } from "@/types/generator";
 
@@ -13,6 +14,8 @@ interface GeneratorConfigProps {
 
 export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProps) {
     const searchParams = useSearchParams();
+    const router = useRouter();
+    const locale = useLocale();
     const prefilledTopic = searchParams.get("topic") || "";
 
     const [config, setConfig] = useState<GeneratorConfigData>({
@@ -67,10 +70,10 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                 strategy += "The AI will craft an engaging, top-of-funnel article designed for readability. It will use relatable examples and shorter paragraphs to keep readers hooked. ";
                 break;
             case 'pillar_page':
-                strategy += "The AI will generate an exhaustive, encyclopedic guide covering all aspects of the topic. Expect high-density information, deep-dive sub-sections, and comprehensive coverage to establish topical SEO authority. ";
+                strategy += "The AI will produce a long-form, downloadable-style ebook: cohesive chapters, high information density, and a narrative that carries the reader from fundamentals to mastery — comprehensive enough to stand alone as a lead magnet. ";
                 break;
             case 'guide':
-                strategy += "The AI will structure the content as a step-by-step masterclass. It will heavily utilize actionable checklists, numbered instructions, and clear 'how-to' formatting. ";
+                strategy += "The AI will structure the content as a precise technical guide: step-by-step procedures, exact configurations, and clear 'how-to' formatting with actionable checklists, so a practitioner can implement each section immediately. ";
                 break;
             case 'product_review':
                 strategy += "The AI will critically evaluate the topic using feature breakdowns. It will mandate HTML comparison tables (pros/cons/specs) and structure the narrative to position your brand as the superior choice. ";
@@ -124,8 +127,8 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                             className="bg-transparent border-b-2 border-dashed border-gray-300 dark:border-gray-700 text-blue-600 dark:text-blue-400 font-semibold focus:outline-none focus:border-blue-600 cursor-pointer pb-1 text-center sm:text-left"
                         >
                             <option value="blog_post">Blog Post</option>
-                            <option value="pillar_page">Pillar Page</option>
-                            <option value="guide">Ultimate Guide</option>
+                            <option value="pillar_page">Ebook</option>
+                            <option value="guide">Technical Guide</option>
                             <option value="product_review">Product Review</option>
                             <option value="service_page">Service Page</option>
                         </select>
@@ -252,6 +255,14 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                                 <p className="text-xs text-indigo-700 dark:text-indigo-400 mt-1 max-w-xl">
                                     Dynamically inject your custom brand identity, core offerings, and internal links directly into the generated content for maximum SEO authority.
                                 </p>
+                                <button
+                                    type="button"
+                                    onClick={() => router.push(`/${locale}/brand`)}
+                                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:text-indigo-800 dark:hover:text-indigo-100 hover:underline transition-colors"
+                                >
+                                    <Building2 className="w-3.5 h-3.5" /> Manage Brand Identity
+                                    <ExternalLink className="w-3 h-3" />
+                                </button>
                             </div>
                             <label className="relative inline-flex items-center cursor-pointer ml-4">
                                 <input
