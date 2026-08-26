@@ -23,7 +23,7 @@ export default function KeywordLabPage() {
     const [currentKeyword, setCurrentKeyword] = useState<string>("");
 
     // Handles the keyword submission, calls the Claude API, and parses the response
-    const handleAnalyze = async (keyword: string) => {
+    const handleAnalyze = async (keyword: string, audience: string = "", customAudience: string = "") => {
         setIsLoading(true);
         setError(null);
         setCurrentKeyword(keyword);
@@ -34,7 +34,11 @@ export default function KeywordLabPage() {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ seedKeyword: keyword }),
+                body: JSON.stringify({
+                    seedKeyword: keyword,
+                    targetAudience: audience,
+                    customTargetAudience: customAudience,
+                }),
             });
 
             if (!response.ok) {

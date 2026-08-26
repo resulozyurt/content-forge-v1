@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { normalizeLanguage } from "@/lib/language";
 import { getContentTypeInstruction } from "@/lib/content-types";
+import { buildAudienceInstruction } from "@/lib/audiences";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -278,6 +279,7 @@ export async function POST(req: NextRequest) {
     const contentType: string        = researchBlueprint.contentType || "blog_post";
     const articleTitle: string       = researchBlueprint.articleTitle || keyword;
     const selectedKeywords: string[] = researchBlueprint.selectedKeywords || [];
+    const audienceInstruction        = buildAudienceInstruction(researchBlueprint.targetAudience, researchBlueprint.customTargetAudience);
     const isFirstSection             = sectionIndex === 0;
     const subHeadings: string[]      = sectionPlan.subHeadings || [];
     const brand                      = researchBlueprint.brandGuidelines || {};
@@ -515,6 +517,8 @@ ${getLangRule(language)}
 ═══════════════════════════════
 
 ${getContentTypeInstruction(contentType)}
+
+${audienceInstruction}
 
 ${getFormatInstruction(sectionPlan.requiredFormat, Math.min(sectionPlan.maxParagraphSentences || 2, 2), sectionIndex)}
 

@@ -24,6 +24,10 @@ interface GenerationParams {
   targetLanguage: "en-US" | "tr-TR";
   // Fix #5: chosen in GeneratorConfig; drives the writer archetype.
   contentType?: ContentType;
+  // Target audience chosen in GeneratorConfig. Attached to the research
+  // blueprint so orchestrate + writer render every section for this persona.
+  targetAudience?: string;
+  customTargetAudience?: string;
   userHeadings: OutlineHeading[];
   selectedKeywords: string[];
   // Forwarded from ResearchAccordion — PAA questions and content gaps
@@ -185,6 +189,8 @@ export function useContentEngine() {
     keyword,
     targetLanguage,
     contentType,
+    targetAudience,
+    customTargetAudience,
     userHeadings,
     selectedKeywords,
     questions = [],
@@ -211,6 +217,10 @@ export function useContentEngine() {
       // Fix #5: attach the content type to the blueprint so both the
       // orchestrator and every writer call receive it downstream.
       researchBlueprint.contentType = contentType ?? "blog_post";
+      // Attach the target audience so orchestrate + writer can build a
+      // persona-specific instruction. Optional: blank → no audience injection.
+      researchBlueprint.targetAudience = targetAudience ?? "";
+      researchBlueprint.customTargetAudience = customTargetAudience ?? "";
 
       // ── Build raw sections from Outline Architect headings ───────────────
       const rawSections = buildSectionsFromHeadings(userHeadings);

@@ -166,6 +166,10 @@ export default function LiveGeneration({ outlineData, onComplete }: LiveGenerati
             // Fix #5: forward the selected content type so the engine can
             // hand the writer a type-specific archetype (pillar/guide/etc.).
             contentType: outlineData.config?.contentType,
+            // Target audience chosen in GeneratorConfig — threads through the
+            // whole pipeline (research → orchestrate → writer) as a persona.
+            targetAudience: outlineData.config?.targetAudience,
+            customTargetAudience: outlineData.config?.customTargetAudience,
             userHeadings: outlineData.headings || [],
             selectedKeywords,
             questions,

@@ -17,6 +17,8 @@ export interface GeneratorConfigData {
   targetLength: string;
   enableBrandVoice: boolean;
   targetAudience: string;
+  // When targetAudience === "custom", this holds the user's free-text audience.
+  customTargetAudience?: string;
   wpSitemap?: string;
   customBrandName?: string;
   customBrandDesc?: string;
@@ -31,7 +33,8 @@ export const initialConfigData: GeneratorConfigData = {
   tone: 'professional',
   targetLength: '1000',
   enableBrandVoice: false,
-  targetAudience: '',
+  targetAudience: 'general',
+  customTargetAudience: '',
   wpSitemap: '',
   customBrandName: '',
   customBrandDesc: '',

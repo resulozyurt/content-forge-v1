@@ -3,11 +3,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@contentforge/database"; 
+import { prisma } from "@contentforge/database";
+import { resolveAudiencePersona, resolveAudienceLabel } from "@/lib/audiences";
 
 // Strict validation schema for the incoming payload
 const requestSchema = z.object({
   seedKeyword: z.string().min(2, "Keyword is too short").max(100, "Keyword is too long"),
+  // Optional target audience chosen before analysis. Backward compatible:
+  // absent → the strategy is generated exactly as before.
+  targetAudience: z.string().max(100).optional(),
+  customTargetAudience: z.string().max(300).optional(),
 });
 
 // System prompt strictly formatted for JSON output
@@ -53,7 +58,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid payload provided" }, { status: 400 });
     }
 
-    const { seedKeyword } = parsed.data;
+    const { seedKeyword, targetAudience, customTargetAudience } = parsed.data;
+    const audiencePersona = resolveAudiencePersona(targetAudience, customTargetAudience);
+    const audienceLabel = resolveAudienceLabel(targetAudience, customTargetAudience);
 
     const message = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
@@ -63,7 +70,9 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `Seed Keyword: "${seedKeyword}"`,
+          content: audiencePersona
+            ? `Seed Keyword: "${seedKeyword}"\nTarget audience: ${audiencePersona}.\nTailor every cluster keyword, SEO opportunity, AI overview keyword, topic idea, and tactical tip to this specific audience.`
+            : `Seed Keyword: "${seedKeyword}"`,
         },
       ],
     });
@@ -77,6 +86,12 @@ export async function POST(req: Request) {
       jsonResponse = JSON.parse(rawJson);
     } catch (parseError) {
       return NextResponse.json({ error: "AI returned malformed data" }, { status: 500 });
+    }
+
+    // Persist the chosen audience alongside the results (Phase 1: stored inside
+    // the results JSON, so it survives in history without a schema migration).
+    if (audienceLabel) {
+      jsonResponse.targetAudience = audienceLabel;
     }
 
     // NEW: Save the valid response to the KeywordSession table

@@ -4,9 +4,10 @@
 import { useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useLocale } from "next-intl";
-import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2, ExternalLink } from "lucide-react";
+import { Search, Sparkles, Settings2, Globe, BrainCircuit, FileText, ChevronDown, ChevronUp, AlignLeft, Building2, ExternalLink, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GeneratorConfigData, initialConfigData, ContentType, Language, AIModel, Tone, ContentDepth } from "@/types/generator";
+import { AUDIENCE_PRESETS, CUSTOM_AUDIENCE_VALUE } from "@/lib/audiences";
 
 interface GeneratorConfigProps {
     onStartResearch: (config: GeneratorConfigData) => void;
@@ -134,6 +135,32 @@ export default function GeneratorConfig({ onStartResearch }: GeneratorConfigProp
                         </select>
 
                         <span className="text-gray-600 dark:text-gray-400 whitespace-nowrap">about</span>
+                    </div>
+
+                    {/* Target Audience — chosen before generation; shapes outline, writer, and SEO downstream */}
+                    <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3 text-base">
+                        <span className="text-gray-600 dark:text-gray-400 whitespace-nowrap flex items-center gap-1.5">
+                            <Users className="w-4 h-4 text-indigo-500" /> Written for
+                        </span>
+                        <select
+                            value={config.targetAudience || "general"}
+                            onChange={(e) => updateConfig('targetAudience', e.target.value)}
+                            className="bg-transparent border-b-2 border-dashed border-gray-300 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 font-semibold focus:outline-none focus:border-indigo-600 cursor-pointer pb-1"
+                        >
+                            {AUDIENCE_PRESETS.map((a) => (
+                                <option key={a.value} value={a.value}>{a.label}</option>
+                            ))}
+                            <option value={CUSTOM_AUDIENCE_VALUE}>Custom…</option>
+                        </select>
+                        {config.targetAudience === CUSTOM_AUDIENCE_VALUE && (
+                            <input
+                                type="text"
+                                value={config.customTargetAudience || ""}
+                                onChange={(e) => updateConfig('customTargetAudience', e.target.value)}
+                                placeholder="Describe your audience — e.g. freelance designers just starting out"
+                                className="flex-1 min-w-0 bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            />
+                        )}
                     </div>
 
                     <div className="mt-6 relative">

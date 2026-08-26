@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 import { normalizeLanguage } from "@/lib/language";
+import { resolveAudiencePersona } from "@/lib/audiences";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY || "" });
 
@@ -137,6 +138,10 @@ export async function POST(req: NextRequest) {
     const questions: string[] = researchBlueprint.questions || [];
     const gaps: string[] = researchBlueprint.gaps || [];
     const searchIntent: string = researchBlueprint.searchIntent || "Informational";
+    const audiencePersona: string = resolveAudiencePersona(
+      researchBlueprint.targetAudience,
+      researchBlueprint.customTargetAudience
+    );
     const total = sections.length;
 
     // ── Step 1: Assign roles, formats, PAA, gaps per section ───────────────
@@ -174,7 +179,8 @@ export async function POST(req: NextRequest) {
         role: "user",
         content: `You are an editorial director planning a high-quality ${langRule} article about "${keyword}".
 Search intent: ${searchIntent}
-Sections in order: ${sections.map((s: any, i: number) => `${i + 1}. ${s.title}`).join(" | ")}
+${audiencePersona ? `Target reader: ${audiencePersona}. Frame the reader's problem, the narrative arc, and the unique angle specifically for this reader.
+` : ""}Sections in order: ${sections.map((s: any, i: number) => `${i + 1}. ${s.title}`).join(" | ")}
 
 Write a private editorial blueprint with THREE parts. Output ONLY valid JSON, no markdown:
 
