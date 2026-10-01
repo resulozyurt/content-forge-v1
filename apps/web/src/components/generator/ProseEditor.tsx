@@ -29,7 +29,7 @@ import {
     Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
     Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
     ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info,
-    Sparkles, Highlighter
+    Sparkles, Highlighter, Download
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -283,6 +283,10 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [isAILoading, setIsAILoading] = useState<boolean>(false);
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
+    const [isExportingWord, setIsExportingWord] = useState(false);
+    const [wordExportMessage, setWordExportMessage] = useState<string | null>(null);
+    const [wordExportError, setWordExportError] = useState(false);
+    const wordExportInProgress = useRef(false);
     const [copyHtmlStatus, setCopyHtmlStatus] = useState<'idle' | 'copied'>('idle');
     const [currentHtml, setCurrentHtml] = useState<string>("");
     const hasSaved = useRef(false);
@@ -636,6 +640,30 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     // Turndown, data: URI'yi olduğu gibi Markdown string'e basıyor → ~300KB
     // clipboard. stripBase64ImagesFromHtml() bunu önler.
     // -----------------------------------------------------------------------
+    const handleExportWord = async () => {
+        if (!editor || editor.isEmpty || wordExportInProgress.current) return;
+        wordExportInProgress.current = true;
+        setIsExportingWord(true);
+        setWordExportMessage(null);
+        setWordExportError(false);
+        // Snapshot now, so typing while images load cannot change this export.
+        const document = editor.getJSON();
+        try {
+            const { downloadWordDocument } = await import("@/lib/word-export");
+            const missing = await downloadWordDocument(document, seoMeta.metaTitle || "Article");
+            setWordExportMessage(missing > 0
+                ? "Word file downloaded. " + missing + " image(s) could not be included; placeholders show where they belong."
+                : "Word file downloaded.");
+        } catch (error) {
+            console.error("[WORD_EXPORT_ERROR]", error);
+            setWordExportError(true);
+            setWordExportMessage("Word export failed. Please try again.");
+        } finally {
+            wordExportInProgress.current = false;
+            setIsExportingWord(false);
+        }
+    };
+
     const handleExportMarkdown = async () => {
         if (!editor) return;
         try {
@@ -788,7 +816,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                     {/* Faz 6.1: Proofread stays wired exactly as-is but is hidden from users.
                         Kept in the DOM (display:none) so handleProofread/isProofreading remain referenced. */}
                     <div className="hidden">
@@ -829,6 +857,17 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     </button>
 
                     <button
+                        onClick={handleExportWord}
+                        disabled={!editor || editor.isEmpty || isExportingWord}
+                        aria-busy={isExportingWord}
+                        className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isExportingWord
+                            ? <><Loader2 size={16} className="mr-2 animate-spin" /> Exporting...</>
+                            : <><Download size={16} className="mr-2" /> Export Word</>}
+                    </button>
+
+                    <button
                         onClick={handleWPPublish}
                         disabled={isPublishing}
                         className={cn(
@@ -840,6 +879,15 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                     </button>
                 </div>
             </div>
+
+            {wordExportMessage && (
+                <p role={wordExportError ? "alert" : "status"} className={cn(
+                    "px-5 py-3 text-sm border-x border-gray-200 dark:border-gray-800",
+                    wordExportError ? "text-red-700 dark:text-red-400" : "text-slate-700 dark:text-slate-300"
+                )}>
+                    {wordExportMessage}
+                </p>
+            )}
 
             <div className="flex flex-col lg:flex-row border-x border-b border-gray-200 dark:border-gray-800 rounded-b-2xl overflow-hidden bg-gray-50/30 dark:bg-gray-900/50">
                 <div className="flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
