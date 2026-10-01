@@ -188,7 +188,8 @@ function findParagraphByText(editorInstance: any, text: string): ParagraphMatch 
 // TipTap extensions — tablo desteği dahil
 // ---------------------------------------------------------------------------
 const globalEditorExtensions = [
-    StarterKit,
+    // Keep one link extension, with the editor's existing click behavior.
+    StarterKit.configure({ link: false }),
     Image.configure({
         inline: true,
         allowBase64: true,  // Allow data:image/... URIs from Gemini
@@ -372,7 +373,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         immediatelyRender: false,
         editorProps: {
             attributes: {
-                class: 'prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px] p-4 prose-table:w-full prose-th:border prose-th:border-gray-300 prose-th:px-3 prose-th:py-2 prose-th:bg-gray-50 prose-th:dark:bg-gray-800 prose-td:border prose-td:border-gray-300 prose-td:px-3 prose-td:py-2',
+                class: 'contentforge-editor prose prose-lg prose-blue dark:prose-invert max-w-none focus:outline-none min-h-[500px] p-4 prose-table:w-full prose-th:border prose-th:border-gray-300 prose-th:px-3 prose-th:py-2 prose-th:bg-gray-50 prose-th:dark:bg-gray-800 prose-td:border prose-td:border-gray-300 prose-td:px-3 prose-td:py-2',
             },
         },
         onUpdate({ editor }) {
