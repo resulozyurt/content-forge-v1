@@ -20,19 +20,22 @@ import TurndownService from 'turndown';
 import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import { analyzeContent, analyzeKeywordDensity } from "@/lib/content-analysis";
-import { analyzeReadability, readabilityMinScore, type ReadabilityCheck } from "@/lib/readability";
+import { analyzeReadability, readabilityMinScore, scoreImprovementCheck, type ReadabilityCheck } from "@/lib/readability";
 import { runSeoChecklist } from "@/lib/seo-checklist";
 import { useRef } from 'react';
 
 import {
     UploadCloud, CheckCircle2, Activity,
     Search, Code, Layout,
-    Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
+    Loader2, AlertCircle, SpellCheck, ChevronDown,
     ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info,
-    Sparkles, Highlighter, Download
+    Sparkles, Highlighter, Save, Undo2, Redo2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EditorAITools from "./EditorAITools";
+import ReadabilityReview from "./ReadabilityReview";
+import EditorExportMenu from "./EditorExportMenu";
+import { editorPrimary, editorSecondary, editorInput } from "./editor-ui";
 import { useDocumentAutosave } from "@/hooks/useDocumentAutosave";
 
 // ---------------------------------------------------------------------------
@@ -155,38 +158,6 @@ function findPhraseRanges(doc: PMNode, phrase: string): { from: number; to: numb
 }
 
 // ---------------------------------------------------------------------------
-// findParagraphByText — locates the <p> NODE whose plain text matches a
-// flagged long-paragraph item, and returns its doc position, size and OUTER
-// HTML (inline tags included, straight from the rendered DOM). Used by the
-// paragraph-split fix, which must replace the whole node — not a text range —
-// so links and inline marks survive the round-trip through the AI.
-// ---------------------------------------------------------------------------
-interface ParagraphMatch { pos: number; nodeSize: number; html: string; }
-
-function findParagraphByText(editorInstance: any, text: string): ParagraphMatch | null {
-    const needle = text.replace(/\s+/g, ' ').trim();
-    if (!needle) return null;
-    let result: ParagraphMatch | null = null;
-
-    editorInstance.state.doc.descendants((node: PMNode, pos: number) => {
-        if (result) return false;
-        if (node.type.name !== 'paragraph') return true;
-        if (node.textContent.replace(/\s+/g, ' ').trim() === needle) {
-            const dom = editorInstance.view.nodeDOM(pos) as HTMLElement | null;
-            result = {
-                pos,
-                nodeSize: node.nodeSize,
-                html: dom?.outerHTML || `<p>${node.textContent}</p>`,
-            };
-            return false;
-        }
-        return true;
-    });
-
-    return result;
-}
-
-// ---------------------------------------------------------------------------
 // TipTap extensions — tablo desteği dahil
 // ---------------------------------------------------------------------------
 const globalEditorExtensions = [
@@ -293,10 +264,9 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
     const [isExportingWord, setIsExportingWord] = useState(false);
-    const [wordExportMessage, setWordExportMessage] = useState<string | null>(null);
-    const [wordExportError, setWordExportError] = useState(false);
+    const [exportMessage, setExportMessage] = useState<string | null>(null);
+    const [exportError, setExportError] = useState(false);
     const wordExportInProgress = useRef(false);
-    const [copyHtmlStatus, setCopyHtmlStatus] = useState<'idle' | 'copied'>('idle');
     const [contentReady, setContentReady] = useState(false);
     const [currentHtml, setCurrentHtml] = useState<string>("");
 
@@ -440,7 +410,8 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
     // ── Readability checklist interactions ─────────────────────────────────
     const [activeHighlightCheck, setActiveHighlightCheck] = useState<string | null>(null);
-    const [fixingCheckId, setFixingCheckId] = useState<string | null>(null);
+    const [reviewCheck, setReviewCheck] = useState<ReadabilityCheck | null>(null);
+    const scoreOpportunity = scoreImprovementCheck(readability, outlineData.config?.contentType, articleLanguage);
 
     const applyReadabilityHighlights = useCallback((checkId: string | null, items: string[]) => {
         if (!editor) return;
@@ -470,138 +441,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         }
     }, [editor]);
 
-    // Long-paragraph fix: replaces the whole <p> NODE with 2–3 shorter <p>
-    // blocks returned by the AI. Works at the HTML level so <a> links and
-    // inline marks survive; a link-count guard drops any result that lost one.
-    const handleParagraphSplit = async (check: ReadabilityCheck) => {
-        if (!editor || fixingCheckId) return;
-
-        const targets: { text: string; html: string }[] = [];
-        for (const item of check.items) {
-            const found = findParagraphByText(editor, item);
-            if (found) targets.push({ text: item, html: found.html });
-        }
-        if (targets.length === 0) {
-            alert("The flagged paragraphs could not be located — they may have changed since the last analysis.");
-            return;
-        }
-
-        const requestedDoc = editor.state.doc;
-        try {
-            setFixingCheckId(check.id);
-            const response = await fetch('/api/v2/generator/edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    action: 'SplitParagraphBatch',
-                    paragraphs: targets.map((t) => t.html),
-                    language: articleLanguage
-                })
-            });
-            if (!response.ok) throw new Error("Paragraph split service unavailable.");
-            const data = await response.json();
-            if (!editor.state.doc.eq(requestedDoc)) throw new Error("The article changed while generating. Please run the fix again.");
-            const results: string[] = Array.isArray(data.results) ? data.results : [];
-
-            let skippedLinks = 0;
-            targets.forEach((target, i) => {
-                const html = (results[i] || '').trim();
-                // Must come back as <p> blocks, and must not lose a single link.
-                if (!html || !/^<p[\s>]/i.test(html)) return;
-                const linksBefore = (target.html.match(/<a[\s>]/gi) || []).length;
-                const linksAfter = (html.match(/<a[\s>]/gi) || []).length;
-                if (linksAfter < linksBefore) { skippedLinks++; return; }
-
-                // Re-locate right before replacing — earlier swaps shift positions.
-                const found = findParagraphByText(editor, target.text);
-                if (!found) return;
-                const sanitized = DOMPurify.sanitize(html, PROSE_PURIFY_CONFIG);
-                editor.chain().insertContentAt({ from: found.pos, to: found.pos + found.nodeSize }, sanitized).run();
-            });
-
-            if (skippedLinks > 0) {
-                alert(`${skippedLinks} paragraph(s) were left unchanged because the AI result dropped a link — please split those manually.`);
-            }
-            applyReadabilityHighlights(null, []);
-        } catch (error: any) {
-            console.error("[PARAGRAPH_SPLIT_FAULT]:", error);
-            alert(`Paragraph split failed: ${error.message}`);
-        } finally {
-            setFixingCheckId(null);
-        }
-    };
-
-    // One-click AI fix for a checklist item. Routing:
-    //   long-paragraphs   → node-level paragraph split (links preserved)
-    //   transition-words  → TransitionBatch (context-aware connector rewrite)
-    //   everything else   → SimplifyBatch (sentence-level plain-text swap)
-    // For the sentence-level flows, sentences containing a link are skipped —
-    // a plain-text replacement would destroy the <a> mark.
-    const handleReadabilityFix = async (check: ReadabilityCheck) => {
-        if (!editor || fixingCheckId) return;
-
-        if (check.id === 'long-paragraphs') {
-            return handleParagraphSplit(check);
-        }
-
-        const linkMark = editor.schema.marks.link;
-        const fixable: string[] = [];
-        const precedingContexts: string[] = [];
-        for (const item of check.items) {
-            const ranges = findPhraseRanges(editor.state.doc, item);
-            if (ranges.length === 0) continue;
-            const hasLink = linkMark
-                ? editor.state.doc.rangeHasMark(ranges[0].from, ranges[0].to, linkMark)
-                : false;
-            if (hasLink) continue;
-            fixable.push(item);
-            // Text right before the sentence — lets TransitionBatch pick a
-            // connector that fits the logical relationship.
-            precedingContexts.push(
-                editor.state.doc.textBetween(Math.max(0, ranges[0].from - 220), ranges[0].from, ' ', ' ').trim()
-            );
-        }
-
-        if (fixable.length === 0) {
-            alert("The flagged sentences contain links or could not be located — please edit them manually so links are preserved.");
-            return;
-        }
-
-        const action = check.id === 'transition-words' ? 'TransitionBatch' : 'SimplifyBatch';
-
-        const requestedDoc = editor.state.doc;
-        try {
-            setFixingCheckId(check.id);
-            const response = await fetch('/api/v2/generator/edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, sentences: fixable, contexts: precedingContexts, language: articleLanguage })
-            });
-            if (!response.ok) throw new Error("Readability fix service unavailable.");
-            const data = await response.json();
-            if (!editor.state.doc.eq(requestedDoc)) throw new Error("The article changed while generating. Please run the fix again.");
-            const results: string[] = Array.isArray(data.results) ? data.results : [];
-
-            // Replace sequentially, re-locating each sentence right before its
-            // replacement — earlier swaps shift every later position.
-            fixable.forEach((original, i) => {
-                const rewritten = (results[i] || '').trim();
-                if (!rewritten || rewritten === original) return;
-                const ranges = findPhraseRanges(editor.state.doc, original);
-                if (ranges.length === 0) return;
-                editor.chain().insertContentAt({ from: ranges[0].from, to: ranges[0].to }, rewritten).run();
-            });
-
-            // Positions changed — clear stale highlights.
-            applyReadabilityHighlights(null, []);
-        } catch (error: any) {
-            console.error("[READABILITY_FIX_FAULT]:", error);
-            alert(`Readability fix failed: ${error.message}`);
-        } finally {
-            setFixingCheckId(null);
-        }
-    };
-
     const keywordDensity = useMemo(() => {
         const keywordsToTrack = Array.from(new Set([
             seoMeta.focusKeyword,
@@ -626,20 +465,20 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         if (!editor || editor.isEmpty || wordExportInProgress.current) return;
         wordExportInProgress.current = true;
         setIsExportingWord(true);
-        setWordExportMessage(null);
-        setWordExportError(false);
+        setExportMessage(null);
+        setExportError(false);
         // Snapshot now, so typing while images load cannot change this export.
         const document = editor.getJSON();
         try {
             const { downloadWordDocument } = await import("@/lib/word-export");
             const missing = await downloadWordDocument(document, seoMeta.metaTitle || "Article");
-            setWordExportMessage(missing > 0
+            setExportMessage(missing > 0
                 ? "Word file downloaded. " + missing + " image(s) could not be included; placeholders show where they belong."
                 : "Word file downloaded.");
         } catch (error) {
             console.error("[WORD_EXPORT_ERROR]", error);
-            setWordExportError(true);
-            setWordExportMessage("Word export failed. Please try again.");
+            setExportError(true);
+            setExportMessage("Word export failed. Please try again.");
         } finally {
             wordExportInProgress.current = false;
             setIsExportingWord(false);
@@ -662,10 +501,12 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             });
             const markdown = turndownService.turndown(cleanHtml);
             await navigator.clipboard.writeText(markdown);
-            alert("Success: Document copied to clipboard as Markdown.");
+            setExportError(false);
+            setExportMessage("Copied as Markdown.");
         } catch (error) {
             console.error("[CLIPBOARD_ACCESS_FAULT]:", error);
-            alert("Clipboard access denied. Please verify your browser permissions.");
+            setExportError(true);
+            setExportMessage("Clipboard access denied. Please verify your browser permissions.");
         }
     };
 
@@ -681,11 +522,12 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             // Strip base64/placeholder images — WP'e base64 göndermek anlamsız
             const cleanHtml = stripBase64ImagesFromHtml(rawHtml);
             await navigator.clipboard.writeText(cleanHtml);
-            setCopyHtmlStatus('copied');
-            setTimeout(() => setCopyHtmlStatus('idle'), 2500);
+            setExportError(false);
+            setExportMessage("HTML copied.");
         } catch (error) {
             console.error("[CLIPBOARD_HTML_FAULT]:", error);
-            alert("Clipboard access denied. Please verify your browser permissions.");
+            setExportError(true);
+            setExportMessage("Clipboard access denied. Please verify your browser permissions.");
         }
     };
 
@@ -770,7 +612,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
-                    <button onClick={() => void saveNow()} disabled={saveStatus === 'saving'} className="px-3 py-2 text-sm border rounded-lg disabled:opacity-50">Save now</button>
+                    <button onClick={() => void saveNow()} disabled={saveStatus === 'saving'} className={editorSecondary}><Save size={16} className="text-indigo-500" />Save now</button>
                     {/* Faz 6.1: Proofread stays wired exactly as-is but is hidden from users.
                         Kept in the DOM (display:none) so handleProofread/isProofreading remain referenced. */}
                     <div className="hidden">
@@ -786,40 +628,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                         </button>
                     </div>
 
-                    {/* BUG 1 FIX: Copy HTML — h2/h3/table/link dahil tam HTML kopyalar */}
-                    <button
-                        onClick={handleCopyHtml}
-                        className={cn(
-                            "inline-flex items-center px-4 py-2 border text-sm font-bold rounded-lg transition-colors",
-                            copyHtmlStatus === 'copied'
-                                ? "bg-green-50 dark:bg-green-900/20 border-green-300 dark:border-green-700 text-green-700 dark:text-green-400"
-                                : "bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
-                        )}
-                    >
-                        {copyHtmlStatus === 'copied'
-                            ? <><CheckCircle2 size={16} className="mr-2" /> Copied!</>
-                            : <><Copy size={16} className="mr-2" /> Copy HTML</>
-                        }
-                    </button>
-
-                    {/* Markdown export — images stripped to avoid base64 blob in clipboard */}
-                    <button
-                        onClick={handleExportMarkdown}
-                        className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                    >
-                        <Copy size={16} className="mr-2" /> Copy as MD
-                    </button>
-
-                    <button
-                        onClick={handleExportWord}
-                        disabled={!editor || editor.isEmpty || isExportingWord}
-                        aria-busy={isExportingWord}
-                        className="inline-flex items-center px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-sm font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isExportingWord
-                            ? <><Loader2 size={16} className="mr-2 animate-spin" /> Exporting...</>
-                            : <><Download size={16} className="mr-2" /> Export Word</>}
-                    </button>
+                    <EditorExportMenu copyHtml={handleCopyHtml} copyMarkdown={handleExportMarkdown} exportWord={handleExportWord} exporting={isExportingWord} empty={editor.isEmpty} />
 
                     <button
                         onClick={handleWPPublish}
@@ -834,22 +643,23 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                 </div>
             </div>
 
+            {editor && reviewCheck && <ReadabilityReview editor={editor} check={reviewCheck} language={articleLanguage} onClose={() => { setReviewCheck(null); applyReadabilityHighlights(null, []); }} />}
             {saveError && <p role="alert" className="p-3 text-sm text-red-600">{saveError}</p>}
-            {wordExportMessage && (
-                <p role={wordExportError ? "alert" : "status"} className={cn(
+            {exportMessage && (
+                <p role={exportError ? "alert" : "status"} className={cn(
                     "px-5 py-3 text-sm border-x border-gray-200 dark:border-gray-800",
-                    wordExportError ? "text-red-700 dark:text-red-400" : "text-slate-700 dark:text-slate-300"
+                    exportError ? "text-red-700 dark:text-red-400" : "text-slate-700 dark:text-slate-300"
                 )}>
-                    {wordExportMessage}
+                    {exportMessage}
                 </p>
             )}
 
             <div className="flex flex-col lg:flex-row border-x border-b border-gray-200 dark:border-gray-800 rounded-b-2xl overflow-hidden bg-gray-50/30 dark:bg-gray-900/50">
-                <div className="flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
+                <div data-editor-scroll className="min-w-0 flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
                     <EditorAITools editor={editor} language={articleLanguage} title={seoMeta.metaTitle} />
                     <div className="flex gap-2 mb-3">
-                        <button className="text-sm border rounded px-3 py-1" onClick={() => editor.chain().focus().undo().run()}>Undo</button>
-                        <button className="text-sm border rounded px-3 py-1" onClick={() => editor.chain().focus().redo().run()}>Redo</button>
+                        <button className={editorSecondary + " !px-2.5 !py-1.5 !text-xs"} onClick={() => editor.chain().focus().undo().run()}><Undo2 size={14} />Undo</button>
+                        <button className={editorSecondary + " !px-2.5 !py-1.5 !text-xs"} onClick={() => editor.chain().focus().redo().run()}><Redo2 size={14} />Redo</button>
                     </div>
                     <EditorContent editor={editor} />
                 </div>
@@ -883,7 +693,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                         </div>
 
                                         <label className="block text-xs text-gray-500">Article language
-                                            <select aria-label="Article language" value={articleLanguage} onChange={event => setArticleLanguage(event.target.value)} className="ml-2 border rounded p-1 bg-white dark:bg-gray-900">
+                                            <select aria-label="Article language" value={articleLanguage} onChange={event => setArticleLanguage(event.target.value)} className={editorInput + " !w-auto !py-1.5 ml-2"}>
                                                 <option value="en">English</option><option value="tr">Türkçe</option>
                                             </select>
                                         </label>
@@ -897,6 +707,14 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                             {scoreChange.before} → {scoreChange.after}: {scoreChange.after > scoreChange.before ? "+" : ""}{scoreChange.after - scoreChange.before} points.
                                             {" "}{scoreChange.resolved} checklist issues resolved in the last edit.
                                         </p>}
+
+                                        {scoreOpportunity && <div className="space-y-2 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 dark:border-indigo-900 dark:bg-indigo-950/30">
+                                            <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Improve the score</p>
+                                            <p className="text-xs text-gray-600 dark:text-gray-300">{scoreOpportunity.message}</p>
+                                            <button className={editorPrimary + " !text-xs"} disabled={currentHtml !== analysisHtml || !!reviewCheck} onClick={() => setReviewCheck(scoreOpportunity)}>
+                                                <Sparkles size={14} />Review score suggestions
+                                            </button>
+                                        </div>}
 
                                         {/* ── Kişiselleştirilmiş iyileştirme listesi (Faz 3) ──
                                             Deterministic checks from lib/readability.ts — each item
@@ -948,13 +766,11 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                                                         {activeHighlightCheck === check.id ? 'Clear' : 'Show in text'}
                                                                     </button>
                                                                     <button
-                                                                        onClick={() => handleReadabilityFix(check)}
-                                                                        disabled={fixingCheckId !== null}
-                                                                        className="flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                                                                        onClick={() => setReviewCheck(check)}
+                                                                        disabled={reviewCheck !== null || currentHtml !== analysisHtml}
+                                                                        className={editorPrimary + " !px-2.5 !py-1.5 !text-xs"}
                                                                     >
-                                                                        {fixingCheckId === check.id
-                                                                            ? <Loader2 size={11} className="animate-spin" />
-                                                                            : <Sparkles size={11} />}
+                                                                        <Sparkles size={13} />
                                                                         Fix with AI
                                                                     </button>
                                                                 </div>

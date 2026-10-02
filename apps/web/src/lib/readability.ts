@@ -74,6 +74,8 @@ export interface ReadabilityReport {
   /** Tailwind bg-* class, same semantics the panel already used. */
   color: string;
   avgSentenceLength: number;
+  avgSyllablesPerWord: number;
+  scoreCandidates: string[];
   sentenceCount: number;
   /** Prose words only (matches what the score is computed over). */
   wordCount: number;
@@ -499,6 +501,16 @@ export function analyzeReadability(
     label,
     color,
     avgSentenceLength: Math.round(avgSentenceLength * 10) / 10,
+    avgSyllablesPerWord: Math.round(syllablesPerWord * 100) / 100,
+    scoreCandidates: [...new Set(allSentences)].sort((a, b) => {
+      const difficulty = (sentence: string) => {
+        const words = wordsOf(sentence);
+        const syllables = words.reduce((sum, word) => sum + countSyllables(word), 0);
+        return (isTurkish ? 40.175 : 84.6) * syllables / Math.max(1, words.length)
+          + (isTurkish ? 2.61 : 1.015) * words.length;
+      };
+      return difficulty(b) - difficulty(a);
+    }).slice(0, MAX_ITEMS_PER_CHECK),
     sentenceCount: allSentences.length,
     wordCount: proseWordCount,
     insufficientProse,
@@ -557,4 +569,15 @@ export function readabilityMinScore(
     default:
       return isTurkish ? 50 : 55;
   }
+}
+
+/** Formula-based candidates remain useful even when every checklist threshold passes. */
+export function scoreImprovementCheck(report: ReadabilityReport, contentType?: string, language?: string): ReadabilityCheck | null {
+  if (report.insufficientProse || report.score >= readabilityMinScore(contentType, language)) return null;
+  return {
+    id: "reading-ease", label: "Reading ease", status: "problem", affectsScore: true,
+    count: report.scoreCandidates.length, total: report.sentenceCount, items: report.scoreCandidates,
+    message: "The article averages " + report.avgSentenceLength + " words per sentence and " + report.avgSyllablesPerWord + " syllables per word. Both contribute to the current " + report.score + "/100 score.",
+    suggestion: "Review the hardest passages below. Use shorter everyday equivalents and split dense sentences while keeping necessary technical terms, facts and links.",
+  };
 }

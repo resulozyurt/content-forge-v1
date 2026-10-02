@@ -1,5 +1,8 @@
 "use client";
 
+import { createPortal } from "react-dom";
+import SelectionPopover from "./SelectionPopover";
+import { editorPrimary, editorSecondary, editorIconButton, editorInput } from "./editor-ui";
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { DOMSerializer, type Node as PMNode } from "@tiptap/pm/model";
@@ -14,7 +17,7 @@ const presets = {
     Expand: "Add useful explanations and examples. Preserve the facts and use short sentences.",
     Condense: "Make this concise without losing key facts, links, or meaning.",
 };
-const buttonClass = "px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg disabled:opacity-50";
+const buttonClass = editorSecondary;
 function selectionTarget(editor: Editor): Target | null {
     const { from, to, empty, $from, $to } = editor.state.selection;
     if (editor.state.selection instanceof NodeSelection && editor.state.selection.node.type.name === "image") {
@@ -37,6 +40,16 @@ export default function EditorAITools({ editor, language, title }: { editor: Edi
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState("");
     const controller = useRef<AbortController | null>(null);
+    const promptInput = useRef<HTMLTextAreaElement>(null);
+    useEffect(() => {
+        if (!target) return;
+        const frame = requestAnimationFrame(() => promptInput.current?.focus({ preventScroll: true }));
+        const escape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") { controller.current?.abort(); setTarget(null); setPreview(""); setMessage(""); editor.view.focus(); }
+        };
+        window.addEventListener("keydown", escape);
+        return () => { cancelAnimationFrame(frame); window.removeEventListener("keydown", escape); };
+    }, [target, editor]);
     const [replacement, setReplacement] = useState<{ before: Target; after: PMNode } | null>(null);
     useEffect(() => {
         const update = () => setAvailable(selectionTarget(editor));
@@ -118,29 +131,35 @@ export default function EditorAITools({ editor, language, title }: { editor: Edi
         editor.chain().focus().insertContentAt({ from: target.from, to: target.to }, preview).run();
         setTarget(null); setPreview(""); setMessage("Text applied. Changes are being saved to History.");
     };
+    const anchor = target || available;
     return (
-        <div className="sticky top-0 z-20 mb-3">
-            {!target && available && <button className={buttonClass + " bg-white dark:bg-gray-800 shadow"} onMouseDown={e => e.preventDefault()} onClick={open}>
+        <>
+        {anchor && <SelectionPopover editor={editor} from={anchor.from} to={anchor.to} image={anchor.kind === "image"} expanded={!!target}>
+            {!target && available && <button className={editorSecondary + " w-full text-indigo-600 dark:text-indigo-300"} onMouseDown={e => e.preventDefault()} onClick={open}>
                 <Sparkles size={14} className="inline mr-2" />{available.kind === "image" ? "Regenerate image" : "Edit selection with AI"}
             </button>}
-            {target && <section aria-label={target.kind === "image" ? "Image generation" : "Text generation"} className="rounded-xl border bg-white dark:bg-gray-900 p-4 shadow-lg space-y-3">
-                <div className="flex justify-between items-center"><strong>{target.kind === "image" ? "Generate a replacement image" : "Edit selected text"}</strong><button aria-label="Close AI tools" onClick={close}><X size={18} /></button></div>
+            {target && <section role="dialog" aria-label={target.kind === "image" ? "Image generation" : "Text generation"} className="rounded-xl border border-gray-200 bg-white p-4 text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 space-y-3">
+                <div className="flex justify-between items-center"><strong className="flex items-center gap-2 text-sm"><Sparkles size={16} className="text-indigo-500" />{target.kind === "image" ? "Generate a replacement image" : "Edit selected text"}</strong><button className={editorIconButton} aria-label="Close AI tools" onClick={close}><X size={18} /></button></div>
                 {target.kind === "text" && <div className="flex flex-wrap gap-2">{Object.entries(presets).map(([label, instruction]) => <button className={buttonClass} disabled={busy} key={label} onClick={() => { setPrompt(instruction); setPreview(""); }}>{label}</button>)}</div>}
-                <label className="block text-sm">Your instructions
-                    <textarea aria-label="Your instructions" value={prompt} maxLength={2000} disabled={busy} onChange={event => { setPrompt(event.target.value); setPreview(""); }} rows={3} className="mt-1 w-full rounded-lg border bg-transparent p-2" placeholder={target.kind === "image" ? "Describe the new image, composition, colors, and style..." : "Explain how you want this selection changed..."} />
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300">Your instructions
+                    <textarea ref={promptInput} aria-label="Your instructions" value={prompt} maxLength={2000} disabled={busy} onChange={event => { setPrompt(event.target.value); setPreview(""); }} rows={3} className={editorInput + " mt-2"} placeholder={target.kind === "image" ? "Describe the new image, composition, colors, and style..." : "Explain how you want this selection changed..."} />
                 </label>
                 {target.kind === "image" && <p className="text-xs text-gray-500">A new image will replace this one when ready. The current image stays visible during generation.</p>}
-                <button className={buttonClass + " bg-blue-600 text-white"} disabled={busy || !prompt.trim()} onClick={() => void generate()}>{busy ? <><Loader2 size={14} className="inline animate-spin mr-2" />Generating...</> : "Generate"}</button>
-                {preview && <><div aria-label="Generated text preview" className="prose dark:prose-invert max-h-64 overflow-auto border rounded p-3" dangerouslySetInnerHTML={{ __html: preview }} /><div className="flex gap-2"><button className={buttonClass} onClick={apply}>Apply</button><button className={buttonClass} onClick={() => setPreview("")}>Discard</button></div></>}
+                <button className={editorPrimary} disabled={busy || !prompt.trim()} onClick={() => void generate()}>{busy ? <><Loader2 size={14} className="inline animate-spin mr-2" />Generating...</> : "Generate"}</button>
+                {preview && <><div aria-label="Generated text preview" className="prose dark:prose-invert max-h-64 overflow-auto border rounded p-3" dangerouslySetInnerHTML={{ __html: preview }} /><div className="flex gap-2"><button className={editorPrimary} onClick={apply}>Apply</button><button className={buttonClass} onClick={() => setPreview("")}>Discard</button></div></>}
             </section>}
-            {message && <p role="status" className="mt-2 rounded border bg-white dark:bg-gray-900 p-2 text-sm">{message}</p>}
-            {replacement && !target && <button className={buttonClass + " mt-2"} onClick={() => {
+            {target && message && <p role="status" className="border-t border-gray-200 bg-white p-3 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">{message}</p>}
+        </SelectionPopover>}
+        {!target && message && createPortal(<div className="fixed bottom-5 right-5 z-[60] max-w-sm rounded-xl border border-gray-200 bg-white p-4 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+            <div className="flex items-start gap-3"><p role="status" className="text-sm text-gray-600 dark:text-gray-300">{message}</p><button className={editorIconButton} aria-label="Dismiss notification" onClick={() => setMessage("")}><X size={16} /></button></div>
+            {replacement && <button className={editorSecondary + " mt-3"} onClick={() => {
                 if (!editor.state.doc.eq(replacement.after)) { setMessage("The article has changed. Use the editor Undo button to step back through changes."); return; }
                 editor.view.dispatch(closeHistory(editor.state.tr));
                 editor.commands.setNodeSelection(replacement.before.from);
                 editor.commands.updateAttributes("image", replacement.before.attrs || {});
                 setReplacement(null); setMessage("Previous image restored.");
             }}>Restore previous image</button>}
-        </div>
+        </div>, document.body)}
+        </>
     );
 }
