@@ -9,3 +9,28 @@
 html, body, :root {
   height: 100%;
 }
+
+/* Article links stay recognizable in both editor themes. */
+.contentforge-editor a[href] {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.contentforge-editor a[href]:hover {
+  color: #1d4ed8;
+}
+
+.dark .contentforge-editor a[href] {
+  color: #60a5fa;
+}
+
+.dark .contentforge-editor a[href]:hover {
+  color: #93c5fd;
+}
+
+
+.contentforge-editor img.ProseMirror-selectednode {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}

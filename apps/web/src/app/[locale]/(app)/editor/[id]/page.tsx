@@ -76,6 +76,7 @@ export default async function EditorPage({
                     outlineData={outlineData}
                     initialHtml={document.outputContent || undefined}
                     documentId={document.id}
+                    initialRevision={document.updatedAt.toISOString()}
                 />
             </div>
         </div>

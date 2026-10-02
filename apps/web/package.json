@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:word-export": "tsx --test src/lib/word-export.test.ts",
+    "test:editor": "node scripts/test-editor.mjs",
+    "test:unit": "tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
@@ -17,8 +20,8 @@
     "@google/generative-ai": "^0.24.1",
     "@headlessui/react": "^2.2.10",
     "@tiptap/extension-image": "^3.22.3",
-    "@tiptap/extension-table": "^3.22.3",
     "@tiptap/extension-link": "^3.22.3",
+    "@tiptap/extension-table": "^3.22.3",
     "@tiptap/pm": "^3.22.3",
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",
@@ -26,6 +29,8 @@
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
+    "docx": "9.5.1",
+    "htmlparser2": "10.1.0",
     "isomorphic-dompurify": "^3.8.0",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",
@@ -42,6 +47,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.2",
     "@tailwindcss/postcss": "^4.2.2",
     "@tailwindcss/typography": "^0.5.19",
     "@types/bcrypt": "^6.0.0",
@@ -53,7 +59,9 @@
     "@types/turndown": "^5.0.6",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
+    "jszip": "3.10.1",
     "tailwindcss": "^4",
+    "tsx": "4.20.6",
     "typescript": "^5"
   }
 }
