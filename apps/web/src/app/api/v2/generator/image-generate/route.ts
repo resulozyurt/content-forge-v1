@@ -66,7 +66,7 @@ function parseRetryDelayMs(bodyText: string, headers: Headers): number | null {
 
 // ---------------------------------------------------------------------------
 // Gemini requires an explicit image-generation instruction in the prompt.
-// Without the "Generate a photorealistic image:" prefix the model sometimes
+// Without the "Generate an image following this description and requested style:" prefix the model sometimes
 // returns a text-only response (no inlineData), especially for non-English
 // or abstract prompts. We also retry on no-inlineData before giving up.
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ async function callGemini(model: string, prompt: string, apiKey: string): Promis
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   // Prefix forces Gemini into image-generation mode regardless of prompt language
-  const fullPrompt = `Generate a photorealistic image: ${prompt}`;
+  const fullPrompt = `Generate an image following this description and requested style: ${prompt}`;
   const startedAt = Date.now();
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -86,7 +86,7 @@ async function callGemini(model: string, prompt: string, apiKey: string): Promis
           contents: [{ parts: [{ text: fullPrompt }] }],
           generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
         }),
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(60000, DEADLINE_MS - (Date.now() - startedAt)))),
       });
 
       if (!res.ok) {
@@ -177,26 +177,31 @@ async function generateImageWithGemini(prompt: string): Promise<string | null> {
 // Body: { prompt: string, sectionIndex: number, sectionTitle: string }
 // Response: { imageDataUri: string | null, sectionIndex: number, fallbackSrc: string }
 // ---------------------------------------------------------------------------
+export const maxDuration = 120;
+
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { prompt, sectionIndex, sectionTitle } = await req.json();
+    const { prompt, sectionIndex, sectionTitle, mode } = await req.json();
 
-    if (typeof prompt !== "string" || (prompt?.length ?? 0) === 0) {
-      return NextResponse.json({ error: "prompt is required" }, { status: 400 });
+    if (typeof prompt !== "string" || !prompt.trim() || (mode === "regenerate" && prompt.length > 2000)) {
+      return NextResponse.json({ error: "Enter a prompt (up to 2,000 characters for regeneration)." }, { status: 400 });
     }
 
     // 500 chars gives Gemini enough context for high-quality image generation.
     // 100 was cutting prompts short and causing text-only (no inlineData) responses.
-    const safePrompt = prompt.slice(0, 500);
+    const safePrompt = mode === "regenerate" ? prompt.trim() : prompt.slice(0, 500);
     const fallbackSrc = `https://placehold.co/1200x630/1e40af/ffffff?text=${encodeURIComponent(safePrompt.slice(0, 60))}`;
 
-    console.log(`[IMAGE_GEN] section=${sectionIndex} prompt="${safePrompt}"`);
+    console.log(`[IMAGE_GEN] section=${sectionIndex}`);
 
     const imageDataUri = await generateImageWithGemini(safePrompt);
 
+    if (mode === "regenerate" && !imageDataUri) {
+      return NextResponse.json({ error: "Image generation is unavailable. Your original image is unchanged. Please retry." }, { status: 502 });
+    }
     return NextResponse.json(
       { imageDataUri, sectionIndex, sectionTitle, fallbackSrc },
       { status: 200 }

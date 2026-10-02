@@ -20,18 +20,20 @@ import TurndownService from 'turndown';
 import DOMPurify from 'isomorphic-dompurify';
 import { GeneratedBlock, FinalOutlineData } from "@/types/generator";
 import { analyzeContent, analyzeKeywordDensity } from "@/lib/content-analysis";
-import { analyzeReadability, type ReadabilityCheck } from "@/lib/readability";
+import { analyzeReadability, readabilityMinScore, type ReadabilityCheck } from "@/lib/readability";
 import { runSeoChecklist } from "@/lib/seo-checklist";
 import { useRef } from 'react';
 
 import {
-    UploadCloud, CheckCircle2, Activity, Target,
-    Wand2, ArrowLeftRight, Scissors, Search, Code, Layout,
+    UploadCloud, CheckCircle2, Activity,
+    Search, Code, Layout,
     Loader2, AlertCircle, SpellCheck, Copy, ChevronDown,
     ChevronRight, BookOpen, ListChecks, Hash, XCircle, Info,
     Sparkles, Highlighter, Download
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EditorAITools from "./EditorAITools";
+import { useDocumentAutosave } from "@/hooks/useDocumentAutosave";
 
 // ---------------------------------------------------------------------------
 // DOMPurify — tüm semantik HTML taglarını koru, tablo ve figür dahil
@@ -51,7 +53,7 @@ const PROSE_PURIFY_CONFIG = {
         "class", "id", "style",
         "width", "height", "loading",
         "colspan", "rowspan",
-        "data-img-placeholder",
+        "data-img-placeholder", "data-image-prompt",
     ],
     // Allow data: URIs so Gemini base64 images are not stripped
     ALLOW_DATA_URI_TAGS: ["img"],
@@ -190,7 +192,15 @@ function findParagraphByText(editorInstance: any, text: string): ParagraphMatch 
 const globalEditorExtensions = [
     // Keep one link extension, with the editor's existing click behavior.
     StarterKit.configure({ link: false }),
-    Image.configure({
+    Image.extend({
+        addAttributes() {
+            return { ...this.parent?.(), prompt: {
+                default: null,
+                parseHTML: element => element.getAttribute('data-image-prompt'),
+                renderHTML: attributes => attributes.prompt ? { 'data-image-prompt': attributes.prompt } : {},
+            } };
+        },
+    }).configure({
         inline: true,
         allowBase64: true,  // Allow data:image/... URIs from Gemini
     }),
@@ -207,6 +217,7 @@ interface ProseEditorProps {
     outlineData: FinalOutlineData;
     initialHtml?: string;
     documentId?: string;
+    initialRevision?: string;
 }
 
 type SidebarTab = 'optimize' | 'research' | 'technical';
@@ -277,11 +288,8 @@ function stripBase64ImagesFromHtml(html: string): string {
         .trim();
 }
 
-export default function ProseEditor({ blocks, outlineData, initialHtml, documentId }: ProseEditorProps) {
-    const [hasSelection, setHasSelection] = useState(false);
+export default function ProseEditor({ blocks, outlineData, initialHtml, documentId, initialRevision }: ProseEditorProps) {
     const [activeTab, setActiveTab] = useState<SidebarTab>('optimize');
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-    const [isAILoading, setIsAILoading] = useState<boolean>(false);
     const [isPublishing, setIsPublishing] = useState<boolean>(false);
     const [isProofreading, setIsProofreading] = useState<boolean>(false);
     const [isExportingWord, setIsExportingWord] = useState(false);
@@ -289,8 +297,8 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
     const [wordExportError, setWordExportError] = useState(false);
     const wordExportInProgress = useRef(false);
     const [copyHtmlStatus, setCopyHtmlStatus] = useState<'idle' | 'copied'>('idle');
+    const [contentReady, setContentReady] = useState(false);
     const [currentHtml, setCurrentHtml] = useState<string>("");
-    const hasSaved = useRef(false);
 
     const [seoMeta, setSeoMeta] = useState({
         focusKeyword: "",
@@ -378,12 +386,12 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         },
         onUpdate({ editor }) {
             setCurrentHtml(editor.getHTML());
-        },
-        onSelectionUpdate({ editor }) {
-            setHasSelection(!editor.state.selection.empty);
+            editor.view.dispatch(editor.state.tr.setMeta(readabilityHighlightKey, DecorationSet.empty));
+            setActiveHighlightCheck(null);
         },
         onCreate({ editor }) {
             setCurrentHtml(editor.getHTML());
+            setContentReady(true);
         }
     });
 
@@ -394,29 +402,41 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         if (editor && blocks && blocks.length > 0) {
             const html = generateHTMLFromBlocks();
             if (html) {
-                editor.commands.setContent(html, false as any);
+                editor.commands.setContent(html, { emitUpdate: true });
             }
         }
     }, [editor, blocks, generateHTMLFromBlocks]);
 
     // v3: article language drives the readability formula (EN Flesch / TR Ateşman)
-    const articleLanguage = (outlineData as any).config?.language || "English (US)";
+    const [articleLanguage, setArticleLanguage] = useState(() => {
+        const language = outlineData.config?.language || "";
+        return /^(tr|turk|türk)/i.test(language) ? "tr" : "en";
+    });
+    const [analysisHtml, setAnalysisHtml] = useState(currentHtml);
+    useEffect(() => {
+        const timer = setTimeout(() => setAnalysisHtml(currentHtml), 350);
+        return () => clearTimeout(timer);
+    }, [currentHtml]);
 
-    const contentStats = useMemo(() => analyzeContent(currentHtml, "", articleLanguage), [currentHtml, articleLanguage]);
-    const readability = useMemo(() => analyzeReadability(currentHtml, articleLanguage), [currentHtml, articleLanguage]);
+    const contentStats = useMemo(() => analyzeContent(analysisHtml, "", articleLanguage), [analysisHtml, articleLanguage]);
+    const readability = useMemo(() => analyzeReadability(analysisHtml, articleLanguage), [analysisHtml, articleLanguage]);
     const checklist = useMemo(() => runSeoChecklist(currentHtml, seoMeta), [currentHtml, seoMeta]);
     const checklistScore = checklist.filter(c => c.pass).length;
 
-    // ── Live score delta (Faz 3): shows +N / −N as the user (or an AI fix)
-    //    edits — the gamification loop that makes the checklist feel alive.
-    const prevScoreRef = useRef<number | null>(null);
-    const [scoreDelta, setScoreDelta] = useState<number>(0);
+    const previousReport = useRef<typeof readability | null>(null);
+    const previousLanguage = useRef(articleLanguage);
+    const [scoreChange, setScoreChange] = useState<{ before: number; after: number; resolved: number } | null>(null);
     useEffect(() => {
-        if (prevScoreRef.current !== null && readability.score !== prevScoreRef.current) {
-            setScoreDelta(readability.score - prevScoreRef.current);
+        const previous = previousReport.current;
+        if (previousLanguage.current !== articleLanguage || readability.insufficientProse) {
+            setScoreChange(null);
+        } else if (previous && !previous.insufficientProse) {
+            const problems = (report: typeof readability) => report.checks.filter(check => check.status !== "good").length;
+            setScoreChange({ before: previous.score, after: readability.score, resolved: Math.max(0, problems(previous) - problems(readability)) });
         }
-        prevScoreRef.current = readability.score;
-    }, [readability.score]);
+        previousLanguage.current = articleLanguage;
+        previousReport.current = readability;
+    }, [readability, articleLanguage]);
 
     // ── Readability checklist interactions ─────────────────────────────────
     const [activeHighlightCheck, setActiveHighlightCheck] = useState<string | null>(null);
@@ -466,6 +486,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             return;
         }
 
+        const requestedDoc = editor.state.doc;
         try {
             setFixingCheckId(check.id);
             const response = await fetch('/api/v2/generator/edit', {
@@ -479,6 +500,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             });
             if (!response.ok) throw new Error("Paragraph split service unavailable.");
             const data = await response.json();
+            if (!editor.state.doc.eq(requestedDoc)) throw new Error("The article changed while generating. Please run the fix again.");
             const results: string[] = Array.isArray(data.results) ? data.results : [];
 
             let skippedLinks = 0;
@@ -547,6 +569,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
         const action = check.id === 'transition-words' ? 'TransitionBatch' : 'SimplifyBatch';
 
+        const requestedDoc = editor.state.doc;
         try {
             setFixingCheckId(check.id);
             const response = await fetch('/api/v2/generator/edit', {
@@ -556,6 +579,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
             });
             if (!response.ok) throw new Error("Readability fix service unavailable.");
             const data = await response.json();
+            if (!editor.state.doc.eq(requestedDoc)) throw new Error("The article changed while generating. Please run the fix again.");
             const results: string[] = Array.isArray(data.results) ? data.results : [];
 
             // Replace sequentially, re-locating each sentence right before its
@@ -586,55 +610,12 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         return analyzeKeywordDensity(currentHtml, keywordsToTrack);
     }, [currentHtml, seoMeta.focusKeyword, outlineData.selectedKeywords]);
 
-    useEffect(() => {
-        // Guard: already saved this session, or we're editing an existing document
-        if (hasSaved.current || documentId) {
-            if (documentId) setSaveStatus("saved");
-            return;
-        }
-
-        // Don't save until we have actual blocks and a real, non-default title
-        if (!blocks || blocks.length === 0) return;
-        if (
-            !seoMeta.metaTitle ||
-            seoMeta.metaTitle === "Generated SEO Article" ||
-            seoMeta.metaTitle === ""
-        ) return;
-
-        // Mark as saved immediately to prevent any concurrent re-triggers
-        hasSaved.current = true;
-
-        const save = async () => {
-            try {
-                setSaveStatus("saving");
-                const htmlContent = generateHTMLFromBlocks();
-
-                const res = await fetch("/api/documents/save", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        title: seoMeta.metaTitle,
-                        content: htmlContent,
-                        aiModel: "CLAUDE_SONNET_4_6",
-                        // Embed seoMetadata inside inputData so editor/[id] can restore it
-                        inputData: { ...outlineData, seoMetadata: seoMeta },
-                        seoMetadata: seoMeta,
-                    }),
-                });
-
-                if (!res.ok) throw new Error("Save failed.");
-                setSaveStatus("saved");
-            } catch (err) {
-                console.error("[DB_SYNC_ERROR]:", err);
-                hasSaved.current = false; // Allow one retry
-                setSaveStatus("error");
-            }
-        };
-
-        save();
-        // Only re-run when the SEO title becomes available for the first time
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [seoMeta.metaTitle]);
+    const { status: saveStatus, error: saveError, saveNow } = useDocumentAutosave({
+        title: seoMeta.metaTitle,
+        content: currentHtml,
+        inputData: { ...outlineData, config: { ...outlineData.config, language: articleLanguage }, seoMetadata: seoMeta },
+        seoMetadata: seoMeta,
+    }, documentId, initialRevision, contentReady && !!seoMeta.metaTitle);
 
     // -----------------------------------------------------------------------
     // BUG 2 FIX: base64 img src'leri Turndown'a vermeden önce strip et.
@@ -708,36 +689,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
         }
     };
 
-    const handleAIAction = async (action: 'Rewrite' | 'Expand' | 'Condense') => {
-        if (!editor || isAILoading) return;
-        const { from, to } = editor.state.selection;
-        const text = editor.state.doc.textBetween(from, to, ' ');
-        if (!text.trim()) return;
-
-        try {
-            setIsAILoading(true);
-            // v3: routed to the new v2 endpoint — /api/generate/edit no longer
-            // exists (moved to generate_v1_deprecated), so this button 404'd.
-            // Language now travels with the request so TR articles get TR rewrites.
-            const response = await fetch('/api/v2/generator/edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, text, context: seoMeta.metaTitle, language: articleLanguage })
-            });
-
-            if (!response.ok) throw new Error("The NLP transformation pipeline failed.");
-            const data = await response.json();
-            const sanitizedHtml = DOMPurify.sanitize(data.result, PROSE_PURIFY_CONFIG);
-            editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, sanitizedHtml).run();
-        } catch (error: any) {
-            console.error("[EDITOR_AI_FAULT]:", error);
-            alert(`Execution halted: ${error.message}`);
-        } finally {
-            setIsAILoading(false);
-            setHasSelection(false);
-        }
-    };
-
     const handleProofread = async () => {
         if (!editor || isProofreading) return;
         try {
@@ -800,24 +751,26 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                         {contentStats.wordCount} words
                     </div>
 
+                    {saveStatus === 'pending' && <span role="status" className="text-sm text-amber-600">Unsaved changes</span>}
                     {saveStatus === 'saving' && (
                         <span className="text-sm font-medium text-blue-600 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <Loader2 size={16} className="animate-spin" /> Syncing cluster...
+                            <Loader2 size={16} className="animate-spin" /> Saving changes...
                         </span>
                     )}
                     {saveStatus === 'saved' && (
                         <span className="text-sm font-medium text-green-600 bg-green-50 dark:bg-green-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <CheckCircle2 size={16} /> Secured in vault
+                            <CheckCircle2 size={16} /> Saved to History
                         </span>
                     )}
                     {saveStatus === 'error' && (
                         <span className="text-sm font-medium text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-1.5 rounded-md flex items-center gap-1.5">
-                            <AlertCircle size={16} /> Sync fractured
+                            <AlertCircle size={16} /> Save failed
                         </span>
                     )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
+                    <button onClick={() => void saveNow()} disabled={saveStatus === 'saving'} className="px-3 py-2 text-sm border rounded-lg disabled:opacity-50">Save now</button>
                     {/* Faz 6.1: Proofread stays wired exactly as-is but is hidden from users.
                         Kept in the DOM (display:none) so handleProofread/isProofreading remain referenced. */}
                     <div className="hidden">
@@ -881,6 +834,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                 </div>
             </div>
 
+            {saveError && <p role="alert" className="p-3 text-sm text-red-600">{saveError}</p>}
             {wordExportMessage && (
                 <p role={wordExportError ? "alert" : "status"} className={cn(
                     "px-5 py-3 text-sm border-x border-gray-200 dark:border-gray-800",
@@ -892,37 +846,11 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
 
             <div className="flex flex-col lg:flex-row border-x border-b border-gray-200 dark:border-gray-800 rounded-b-2xl overflow-hidden bg-gray-50/30 dark:bg-gray-900/50">
                 <div className="flex-1 p-8 lg:p-12 bg-white dark:bg-[#0B1120] overflow-y-auto max-h-[800px] scroll-smooth relative">
-                    {hasSelection && (
-                        <div className="sticky top-0 z-10 mb-6 flex items-center gap-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 p-2 rounded-xl shadow-xl animate-in slide-in-from-top-2 fade-in duration-200 w-fit mx-auto transition-opacity">
-                            <span className="text-xs font-bold uppercase tracking-widest opacity-50 px-3">AI Engine</span>
-                            <div className="w-px h-5 bg-gray-700 dark:bg-gray-300 mx-1"></div>
-                            {isAILoading ? (
-                                <div className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-blue-400"><Loader2 size={14} className="animate-spin" /> Processing matrix...</div>
-                            ) : (
-                                <>
-                                    {/* onMouseDown preventDefault — stops TipTap from clearing
-                                        selection before the click handler fires. Without this,
-                                        mousedown causes onSelectionUpdate → selection.empty → 
-                                        hasSelection=false → toolbar unmounts → click never runs. */}
-                                    <button
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={() => handleAIAction('Rewrite')}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
-                                    ><Wand2 size={14} className="text-blue-400 dark:text-blue-600" /> Rewrite</button>
-                                    <button
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={() => handleAIAction('Expand')}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
-                                    ><ArrowLeftRight size={14} className="text-green-400 dark:text-green-600" /> Expand</button>
-                                    <button
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={() => handleAIAction('Condense')}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors rounded-md"
-                                    ><Scissors size={14} className="text-red-400 dark:text-red-600" /> Condense</button>
-                                </>
-                            )}
-                        </div>
-                    )}
+                    <EditorAITools editor={editor} language={articleLanguage} title={seoMeta.metaTitle} />
+                    <div className="flex gap-2 mb-3">
+                        <button className="text-sm border rounded px-3 py-1" onClick={() => editor.chain().focus().undo().run()}>Undo</button>
+                        <button className="text-sm border rounded px-3 py-1" onClick={() => editor.chain().focus().redo().run()}>Redo</button>
+                    </div>
                     <EditorContent editor={editor} />
                 </div>
 
@@ -946,23 +874,29 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                                     {contentStats.readabilityFormula === 'atesman' ? 'Ateşman Okunabilirlik' : 'Flesch Reading Ease'}
                                                 </span>
                                                 <span className="flex items-center gap-1.5 text-gray-900 dark:text-white font-bold">
-                                                    {contentStats.fleschScore} ({contentStats.fleschLabel})
-                                                    {scoreDelta !== 0 && (
-                                                        <span className={cn(
-                                                            "text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                                                            scoreDelta > 0
-                                                                ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                                                                : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-                                                        )}>
-                                                            {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta}
-                                                        </span>
-                                                    )}
+                                                    {readability.insufficientProse ? "Not enough text" : contentStats.fleschScore + "/100 (" + contentStats.fleschLabel + ")"}
                                                 </span>
                                             </div>
                                             <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                                 <div className={cn("h-full rounded-full transition-all duration-500", contentStats.fleschColor)} style={{ width: `${contentStats.fleschScore}%` }}></div>
                                             </div>
                                         </div>
+
+                                        <label className="block text-xs text-gray-500">Article language
+                                            <select aria-label="Article language" value={articleLanguage} onChange={event => setArticleLanguage(event.target.value)} className="ml-2 border rounded p-1 bg-white dark:bg-gray-900">
+                                                <option value="en">English</option><option value="tr">Türkçe</option>
+                                            </select>
+                                        </label>
+                                        <p className="text-xs text-gray-500">
+                                            {readability.insufficientProse
+                                                ? "Add at least 40 words of prose for a reliable score."
+                                                : "Target: " + readabilityMinScore(outlineData.config?.contentType, articleLanguage) + "+/100. The formula uses sentence length and syllables per word. Paragraph layout and transitions are separate writing suggestions."}
+                                        </p>
+                                        {currentHtml !== analysisHtml && <p role="status" className="text-xs text-blue-600">Updating analysis...</p>}
+                                        {scoreChange && !readability.insufficientProse && <p role="status" className="text-xs" data-testid="score-change">
+                                            {scoreChange.before} → {scoreChange.after}: {scoreChange.after > scoreChange.before ? "+" : ""}{scoreChange.after - scoreChange.before} points.
+                                            {" "}{scoreChange.resolved} checklist issues resolved in the last edit.
+                                        </p>}
 
                                         {/* ── Kişiselleştirilmiş iyileştirme listesi (Faz 3) ──
                                             Deterministic checks from lib/readability.ts — each item
@@ -987,11 +921,6 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                                                 </span>
                                                             </div>
                                                             <div className="flex items-center gap-2 shrink-0">
-                                                                {check.status !== 'good' && check.scoreImpact > 0 && (
-                                                                    <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 px-1.5 py-0.5 rounded-full">
-                                                                        ≈ +{check.scoreImpact} pts
-                                                                    </span>
-                                                                )}
                                                                 <span className="text-xs font-bold text-gray-500 bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded-full">
                                                                     {check.id === 'transition-words' ? `${check.count}/${check.total}` : check.count}
                                                                 </span>
@@ -1001,6 +930,7 @@ export default function ProseEditor({ blocks, outlineData, initialHtml, document
                                                         <div className="px-3 pb-3 pt-1 space-y-2 border-t border-gray-100 dark:border-gray-800">
                                                             <p className="text-xs text-gray-600 dark:text-gray-300">{check.message}</p>
                                                             <p className="text-xs text-gray-500 dark:text-gray-400 italic">{check.suggestion}</p>
+                                                            <p className="text-[11px] text-gray-500">{check.affectsScore ? "Related to score: sentence length or word complexity." : "Writing suggestion: fixing this alone may leave the score unchanged."}</p>
                                                             {check.items.length > 0 && check.status !== 'good' && (
                                                                 <div className="flex items-center gap-2 pt-1">
                                                                     <button

@@ -28,3 +28,9 @@ html, body, :root {
 .dark .contentforge-editor a[href]:hover {
   color: #93c5fd;
 }
+
+
+.contentforge-editor img.ProseMirror-selectednode {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}

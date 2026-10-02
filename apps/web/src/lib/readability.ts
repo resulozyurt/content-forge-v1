@@ -1,3 +1,5 @@
+import { Parser } from "htmlparser2";
+
 // apps/web/src/lib/readability.ts
 //
 // READABILITY ENGINE (v3) — single source of truth.
@@ -27,7 +29,7 @@
 // Prose extraction rules are identical to v2 (and MUST stay in sync with the
 // writer/editor contract): score <p>/<li> text only; tables, figcaptions,
 // <cite> and headings are excluded; each <li> is its own sentence boundary;
-// fragments under 4 words are UI furniture, not prose.
+// short sentences are included, including single-word list items.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,8 +57,8 @@ export interface ReadabilityCheck {
   /** Offending unit texts (sentences or paragraph snippets) for highlighting
    *  and targeted AI rewrite. Capped to keep payloads small. */
   items: string[];
-  /** Rough estimate of score points recoverable by clearing this check. */
-  scoreImpact: number;
+  /** Whether the check directly measures an input to the readability formula. */
+  affectsScore: boolean;
 }
 
 export interface WorstSentence {
@@ -82,7 +84,7 @@ export interface ReadabilityReport {
 }
 
 // ---------------------------------------------------------------------------
-// Prose extraction (kept byte-compatible with v2 behavior)
+// Prose extraction (shared by the editor and generation gate)
 // ---------------------------------------------------------------------------
 
 interface ProseUnit {
@@ -92,45 +94,51 @@ interface ProseUnit {
   tag: string;
 }
 
-const extractProseUnits = (html: string): ProseUnit[] => {
-  const cleaned = html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<table[\s\S]*?<\/table>/gi, " ")
-    .replace(/<figcaption[\s\S]*?<\/figcaption>/gi, " ")
-    .replace(/<cite[\s\S]*?<\/cite>/gi, " ");
-
+export const extractProseUnits = (html: string): ProseUnit[] => {
   const units: ProseUnit[] = [];
-  const blockRegex = /<(p|li)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = blockRegex.exec(cleaned)) !== null) {
-    const inner = match[2];
-    // Container <li> wrapping <p> blocks — the inner <p> matches separately;
-    // counting both would double the text.
-    if (/<p[\s>]/i.test(inner)) continue;
-
-    const text = inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    // Fragments under 4 words are labels/badges, not prose.
-    if (text.split(/\s+/).filter(Boolean).length < 4) continue;
-
-    units.push({ text, tag: match[1].toLowerCase() });
-  }
-
+  const excludedTags = new Set(["style", "script", "table", "figcaption", "cite", "pre", "h1", "h2", "h3", "h4", "h5", "h6"]);
+  const stack: { tag: string; text: string; excluded: boolean }[] = [];
+  const current = () => [...stack].reverse().find(node => node.tag === "p" || node.tag === "li");
+  const flush = (node: ReturnType<typeof current>) => {
+    if (!node || node.excluded) return;
+    const text = node.text.replace(/\s+/g, " ").trim();
+    // Short sentences still contribute: discarding them biases scores downward.
+    if (wordsOf(text).length > 0) units.push({ text, tag: node.tag as "p" | "li" });
+    node.text = "";
+  };
+  const parser = new Parser({
+    onopentag(tag) {
+      const excluded = !!stack.at(-1)?.excluded || excludedTags.has(tag);
+      if (tag === "p" || tag === "li") flush(current());
+      if (tag === "br" && !excluded) {
+        const node = current();
+        if (node) node.text += " ";
+      }
+      stack.push({ tag, text: "", excluded });
+    },
+    ontext(text) {
+      if (stack.at(-1)?.excluded) return;
+      const node = current();
+      if (node) node.text += text;
+    },
+    onclosetag() {
+      const node = stack.pop();
+      if (node?.tag === "p" || node?.tag === "li") flush(node);
+    },
+  }, { decodeEntities: true });
+  parser.end(html);
   return units;
 };
 
-// Decimal-safe sentence split: only breaks after terminal punctuation
-// followed by whitespace + capital/digit/quote (TR capitals included).
-const splitSentences = (unit: string): string[] => {
-  return unit
-    .split(/(?<=[.!?…])\s+(?=[A-Z0-9ÇĞİÖŞÜ"'"'])/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+export const splitSentences = (unit: string): string[] => {
+  // Protect common abbreviations; decimals are handled by the Unicode segmenter.
+  const protectedText = unit.replace(/\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|vb|örn|ör|bkz)\./gi, value => value.replace(".", "\uE000"));
+  return [...new Intl.Segmenter("en", { granularity: "sentence" }).segment(protectedText)]
+    .map(part => part.segment.replace(/\uE000/g, ".").trim()).filter(Boolean);
 };
 
 const wordsOf = (text: string): string[] =>
-  text.split(/\s+/).filter((w) => w.length > 0);
+  text.match(/[\p{L}\p{N}]+(?:[’'-][\p{L}\p{N}]+)*/gu) || [];
 
 // ---------------------------------------------------------------------------
 // Syllable counting
@@ -248,7 +256,7 @@ export function analyzeReadability(
   const isTurkish =
     raw.length > 0 &&
     ["tr", "tr-tr", "turkish", "türk", "türkçe", "turkce"].some(
-      (h) => raw === h || raw.includes(h)
+      (h) => raw === h || raw.startsWith(h + "-") || raw.startsWith(h + " ")
     );
 
   const units = extractProseUnits(html);
@@ -280,7 +288,7 @@ export function analyzeReadability(
   const rawScore = isTurkish
     ? atesmanTr(avgSentenceLength, syllablesPerWord)
     : fleschEn(avgSentenceLength, syllablesPerWord);
-  const score = clamp(Math.round(rawScore), 0, 100);
+  const score = proseWordCount < MIN_PROSE_WORDS ? 0 : clamp(Math.round(rawScore), 0, 100);
   const { label, color } = labelFor(score, isTurkish);
 
   const insufficientProse = proseWordCount < MIN_PROSE_WORDS;
@@ -316,7 +324,7 @@ export function analyzeReadability(
         "İşaretli cümleleri virgül veya bağlaçtan ikiye bölün. Her cümlede tek fikir."
       ),
       items: longOnes.slice(0, MAX_ITEMS_PER_CHECK),
-      scoreImpact: clamp(Math.round(longPct * 40), longOnes.length > 0 ? 1 : 0, 15),
+      affectsScore: true,
     });
 
     // 2. Complex words
@@ -355,7 +363,7 @@ export function analyzeReadability(
               "1–2 heceli gündelik kelimeleri tercih edin; yalnızca okuyucunun aradığı terimleri koruyun."
             ),
       items: Array.from(sentencesWithComplex).slice(0, MAX_ITEMS_PER_CHECK),
-      scoreImpact: clamp(Math.round(complexPct * 80), complexWords.length > 0 ? 1 : 0, 20),
+      affectsScore: true,
     });
 
     // 3. Passive voice (EN only)
@@ -372,7 +380,7 @@ export function analyzeReadability(
         suggestion:
           'Name the actor: "Teams lose 30% of stock" — not "30% of stock is lost by teams".',
         items: passiveOnes.slice(0, MAX_ITEMS_PER_CHECK),
-        scoreImpact: clamp(Math.round(passivePct * 20), passiveOnes.length > 0 ? 1 : 0, 8),
+        affectsScore: false,
       });
     }
 
@@ -398,7 +406,7 @@ export function analyzeReadability(
         "Her birini 2–3 cümlelik paragraflara bölün — web'de taranabilirlik okunabilirliği belirler."
       ),
       items: longParas.slice(0, MAX_ITEMS_PER_CHECK).map((u) => u.text),
-      scoreImpact: clamp(longParas.length * 2, longParas.length > 0 ? 1 : 0, 6),
+      affectsScore: false,
     });
 
     // 5. Repetitive sentence starts (3+ consecutive with same first word)
@@ -437,7 +445,7 @@ export function analyzeReadability(
         "Başlangıcı çeşitlendirin: nesneyle, bir sayıyla veya soruyla başlayın."
       ),
       items: repeatedRuns.slice(0, MAX_ITEMS_PER_CHECK),
-      scoreImpact: repeatedRuns.length > 0 ? 2 : 0,
+      affectsScore: false,
     });
 
     // 6. Transition words (higher is better — count = sentences WITH one)
@@ -481,7 +489,7 @@ export function analyzeReadability(
         '"Ancak", "örneğin", "bu yüzden", "sonuç olarak" gibi bağlantılar ekleyin. AI düzeltmesi paragraf başlarına bağlaç ekler.'
       ),
       items: transitionCandidates,
-      scoreImpact: 0,
+      affectsScore: false,
     });
   }
 
@@ -491,7 +499,7 @@ export function analyzeReadability(
     label,
     color,
     avgSentenceLength: Math.round(avgSentenceLength * 10) / 10,
-    sentenceCount,
+    sentenceCount: allSentences.length,
     wordCount: proseWordCount,
     insufficientProse,
     checks,
@@ -536,7 +544,7 @@ export function readabilityMinScore(
   language?: string | null
 ): number {
   const raw = (language ?? "").toString().toLowerCase();
-  const isTurkish = ["tr", "türk", "turk"].some((h) => raw.includes(h));
+  const isTurkish = /^(tr(?:$|[- ])|türk|turk)/.test(raw);
   switch (contentType) {
     case "blog_post":
       return isTurkish ? 55 : 60;

@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:word-export": "tsx --test src/lib/word-export.test.ts"
+    "test:word-export": "tsx --test src/lib/word-export.test.ts",
+    "test:editor": "node scripts/test-editor.mjs",
+    "test:unit": "tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
@@ -28,6 +30,7 @@
     "cheerio": "^1.2.0",
     "clsx": "^2.1.1",
     "docx": "9.5.1",
+    "htmlparser2": "10.1.0",
     "isomorphic-dompurify": "^3.8.0",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",
@@ -44,6 +47,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.2",
     "@tailwindcss/postcss": "^4.2.2",
     "@tailwindcss/typography": "^0.5.19",
     "@types/bcrypt": "^6.0.0",
